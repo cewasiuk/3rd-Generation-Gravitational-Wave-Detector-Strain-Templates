@@ -82,4 +82,23 @@ function h_ann(omega, M, n, l, alpha, r)
 end
 
 
+function h_pcr_ann(omega, mua, M,n,l, alpha, r, iota, phase )
 
+
+    omega_a = omega_ann(mua, alpha, n) 
+    omega_a /= 4.1357e-24
+
+    println("Omega_a = $omega_a Hz")
+    println("Max Omega = $(maximum(omega))")
+    println("M = $M solar masses, alpha = $alpha, r = $r kpc, n=$n, l=$l")
+    hmin, freq = h_ann(omega .- omega_a, M,n,l,alpha, r)
+    hp, freq = h_ann(omega .+ omega_a, M,n,l,alpha, r)
+
+    println("hmin first 5 values: $(hmin[1:5])")
+    println("hp first 5 values: $(hp[1:5])")
+
+    h_plus = (1 + cos(iota)^2)/4*(exp(1im*phase)*hmin +exp(-1im*phase)*hp )
+    h_cross = (cos(iota))/(2*1im)*(exp(1im*phase)*hmin -exp(-1im*phase)*hp )
+
+    return h_plus, h_cross, freq
+end
