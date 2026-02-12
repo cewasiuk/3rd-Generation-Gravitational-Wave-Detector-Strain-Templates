@@ -1,3 +1,6 @@
 [deps]
 CairoMakie = "13f3f980-e62b-5c42-98c6-ff1f3baf88f0"
+LsqFit = "2fda8390-95c7-5789-9bda-21331edee243"
+Pickle = "fbb45041-c46e-462f-888f-7c521cafbc2c"
 SpecialFunctions = "276daf66-3868-5448-9aa4-cd146d93841b"
+Statistics = "10745b16-79ce-11e8-11f9-7d13ad32a3b2"

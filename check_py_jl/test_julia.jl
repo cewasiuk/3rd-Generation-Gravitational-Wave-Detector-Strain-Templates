@@ -1,0 +1,304 @@
+"""
+Test script for Julia strain functions.
+Runs both level transition and annihilation strain calculations,
+reads Python outputs, and checks consistency.
+"""
+
+using Pkg
+Pkg.activate("../.")
+using Serialization
+using Printf
+using JSON
+
+# Add parent directory to load path
+push!(LOAD_PATH, dirname(@__DIR__))
+
+# Load the Julia strain functions
+include(joinpath(dirname(@__DIR__), "julia_strain_functions.jl"))
+
+function load_python_json(filename)
+    """Load Python JSON file."""
+    json_filename = replace(filename, ".pkl" => ".json")
+    
+    if !isfile(json_filename)
+        println("Warning: JSON file not found: $json_filename")
+        return nothing
+    end
+    
+    data = JSON.parsefile(json_filename)
+    
+    # Convert complex numbers back from dict format
+    function convert_complex(obj)
+        if isa(obj, Dict) && haskey(obj, "_type") && obj["_type"] == "complex"
+            return Complex(obj["real"], obj["imag"])
+        elseif isa(obj, Dict)
+            return Dict(k => convert_complex(v) for (k, v) in obj)
+        elseif isa(obj, Array)
+            return [convert_complex(x) for x in obj]
+        else
+            return obj
+        end
+    end
+    
+    return convert_complex(data)
+end
+
+function compare_arrays(jl_arr, py_arr, name; rtol=1e-6, atol=1e-10)
+    """Compare Julia and Python arrays."""
+    if length(jl_arr) != length(py_arr)
+        @printf("  ❌ %s: Length mismatch (Julia: %d, Python: %d)\n", 
+                name, length(jl_arr), length(py_arr))
+        return false
+    end
+    
+    # Convert to same type for comparison
+    jl_arr = Float64.(jl_arr)
+    py_arr = Float64.(py_arr)
+    
+    max_diff = maximum(abs.(jl_arr .- py_arr))
+    rel_diff = max_diff / (maximum(abs.(py_arr)) + atol)
+    
+    if rel_diff < rtol
+        @printf("  ✓ %s: max diff = %.3e (rel = %.3e)\n", name, max_diff, rel_diff)
+        return true
+    else
+        @printf("  ❌ %s: max diff = %.3e (rel = %.3e) [EXCEEDS TOLERANCE]\n", 
+                name, max_diff, rel_diff)
+        return false
+    end
+end
+
+function compare_scalars(jl_val, py_val, name; rtol=1e-6)
+    """Compare Julia and Python scalar values."""
+    jl_val = Float64(jl_val)
+    py_val = Float64(py_val)
+    
+    abs_diff = abs(jl_val - py_val)
+    rel_diff = abs_diff / (abs(py_val) + 1e-100)
+    
+    if rel_diff < rtol
+        @printf("  ✓ %s: Julia=%.6e, Python=%.6e (rel diff=%.3e)\n", 
+                name, jl_val, py_val, rel_diff)
+        return true
+    else
+        @printf("  ❌ %s: Julia=%.6e, Python=%.6e (rel diff=%.3e) [EXCEEDS TOLERANCE]\n", 
+                name, jl_val, py_val, rel_diff)
+        return false
+    end
+end
+
+function test_level_transition()
+    """Test level transition strain calculation."""
+    println("\n" * "="^60)
+    println("Testing Level Transition Strain (Julia)")
+    println("="^60)
+    
+    results = iso_gatom_level_tr_strain(
+        M_solar=1e-6,
+        a_spin=0.999999,
+        alpha=1.0,
+        ne=6,
+        ng=5,
+        m=nothing,
+        distance_kpc=10.0,
+        N_e0=1.0,
+        N_g0=1.0,
+        n_time=10000,
+        n_fft=2^18,
+        n_top=400,
+        verbose=true
+    )
+    
+    # Save Julia results
+    open("julia_level_transition.jls", "w") do f
+        serialize(f, results)
+    end
+    println("Saved: julia_level_transition.jls")
+    
+    # Summary statistics
+    max_Ne = maximum(results["N_e"])
+    max_Ng = maximum(results["N_g"])
+    max_h = maximum(abs.(results["h_t"]))
+    max_freq_idx = argmax(abs.(results["H_pos"]))
+    max_freq_pos = results["f_pos"][max_freq_idx]
+    A, f0, gamma, C = results["lorentz_params"]
+    
+    println("\nSummary Statistics:")
+    @printf("  Max N_e: %.6e\n", max_Ne)
+    @printf("  Max N_g: %.6e\n", max_Ng)
+    @printf("  Max h(t): %.6e\n", max_h)
+    @printf("  Lorentzian center f0: %.6e Hz\n", f0)
+    @printf("  Lorentzian width γ: %.6e Hz\n", gamma)
+    
+    return results, Dict(
+        "max_Ne" => max_Ne,
+        "max_Ng" => max_Ng,
+        "max_h" => max_h,
+        "max_freq_pos" => max_freq_pos,
+        "A" => A,
+        "f0" => f0,
+        "gamma" => gamma,
+        "C" => C
+    )
+end
+
+function test_annihilation()
+    """Test annihilation strain calculation."""
+    println("\n" * "="^60)
+    println("Testing Annihilation Strain (Julia)")
+    println("="^60)
+    
+    results = iso_gatom_ann_strain(
+        M_solar=3.1e-4,
+        mua=2e-16,
+        n=4,
+        l=nothing,
+        alpha=nothing,
+        distance_kpc=1.0,
+        iota=0.0,
+        phase=0.0,
+        f_min_Hz=1e9,
+        f_max_Hz=1e11,
+        n_f=5000,
+        verbose=true
+    )
+    
+    # Save Julia results
+    open("julia_annihilation.jls", "w") do f
+        serialize(f, results)
+    end
+    println("Saved: julia_annihilation.jls")
+    
+    # Summary statistics
+    max_h_plus = maximum(abs.(results["h_plus"]))
+    max_h_cross = maximum(abs.(results["h_cross"]))
+    max_h_c = maximum(results["h_c"])
+    peak_freq = results["f_Hz"][argmax(results["h_c"])]
+    
+    println("\nSummary Statistics:")
+    @printf("  Line frequency: %.6e Hz\n", results["f_line_Hz"])
+    @printf("  Max |h_plus|: %.6e\n", max_h_plus)
+    @printf("  Max |h_cross|: %.6e\n", max_h_cross)
+    @printf("  Max h_c: %.6e\n", max_h_c)
+    @printf("  Peak frequency: %.6e Hz\n", peak_freq)
+    
+    return results, Dict(
+        "max_h_plus" => max_h_plus,
+        "max_h_cross" => max_h_cross,
+        "max_h_c" => max_h_c,
+        "peak_freq" => peak_freq
+    )
+end
+
+function compare_level_transition_results(jl_results, jl_stats, py_file)
+    """Compare Julia and Python level transition results."""
+    println("\n" * "="^60)
+    println("Comparing Level Transition Results")
+    println("="^60)
+    
+    # Try to load Python results
+    py_results = load_python_json(py_file)
+    
+    if isnothing(py_results)
+        println("⚠ Cannot load Python JSON file. Comparison skipped.")
+        return
+    end
+    
+    all_pass = true
+    
+    # Compare scalar values
+    println("\nScalar Comparisons:")
+    all_pass &= compare_scalars(jl_results["omega_tr_GeV"], py_results["omega_tr_GeV"], "omega_tr_GeV")
+    all_pass &= compare_scalars(jl_results["Mu_a"], py_results["Mu_a"], "Mu_a")
+    all_pass &= compare_scalars(jl_stats["max_Ne"], py_results["max_Ne"], "max_Ne")
+    all_pass &= compare_scalars(jl_stats["max_Ng"], py_results["max_Ng"], "max_Ng")
+    all_pass &= compare_scalars(jl_stats["max_h"], py_results["max_h"], "max_h")
+    all_pass &= compare_scalars(jl_stats["f0"], py_results["f0"], "f0 (Lorentzian center)")
+    all_pass &= compare_scalars(jl_stats["gamma"], py_results["gamma"], "gamma (Lorentzian width)")
+    
+    # Compare array lengths
+    println("\nArray Length Comparisons:")
+    @printf("  Julia N_e length: %d, Python: %d\n", length(jl_results["N_e"]), length(py_results["N_e"]))
+    @printf("  Julia N_g length: %d, Python: %d\n", length(jl_results["N_g"]), length(py_results["N_g"]))
+    @printf("  Julia f_pos length: %d, Python: %d\n", length(jl_results["f_pos"]), length(py_results["f_pos"]))
+    
+    if all_pass
+        println("\n✅ All comparisons PASSED!")
+    else
+        println("\n⚠ Some comparisons FAILED - check output above")
+    end
+    
+    return all_pass
+end
+
+function compare_annihilation_results(jl_results, jl_stats, py_file)
+    """Compare Julia and Python annihilation results."""
+    println("\n" * "="^60)
+    println("Comparing Annihilation Results")
+    println("="^60)
+    
+    # Try to load Python results
+    py_results = load_python_json(py_file)
+    
+    if isnothing(py_results)
+        println("⚠ Cannot load Python JSON file. Comparison skipped.")
+        return
+    end
+    
+    all_pass = true
+    
+    # Compare scalar values
+    println("\nScalar Comparisons:")
+    all_pass &= compare_scalars(jl_results["f_line_Hz"], py_results["f_line_Hz"], "f_line_Hz")
+    all_pass &= compare_scalars(jl_results["alpha"], py_results["alpha"], "alpha")
+    all_pass &= compare_scalars(jl_results["mua_GeV"], py_results["mua_GeV"], "mua_GeV")
+    all_pass &= compare_scalars(jl_stats["max_h_plus"], py_results["max_h_plus"], "max_h_plus")
+    all_pass &= compare_scalars(jl_stats["max_h_cross"], py_results["max_h_cross"], "max_h_cross")
+    all_pass &= compare_scalars(jl_stats["max_h_c"], py_results["max_h_c"], "max_h_c")
+    
+    # Compare array lengths
+    println("\nArray Length Comparisons:")
+    @printf("  Julia f_Hz length: %d, Python: %d\n", length(jl_results["f_Hz"]), length(py_results["f_Hz"]))
+    @printf("  Julia h_plus length: %d, Python: %d\n", length(jl_results["h_plus"]), length(py_results["h_plus"]))
+    @printf("  Julia h_cross length: %d, Python: %d\n", length(jl_results["h_cross"]), length(py_results["h_cross"]))
+    
+    if all_pass
+        println("\n✅ All comparisons PASSED!")
+    else
+        println("\n⚠ Some comparisons FAILED - check output above")
+    end
+    
+    return all_pass
+end
+
+function main()
+    println("Starting Julia test suite...")
+    
+    # Test level transition
+    level_results, level_stats = test_level_transition()
+    
+    # Test annihilation
+    ann_results, ann_stats = test_annihilation()
+    
+    # Compare with Python results if available
+    if isfile("python_level_transition.pkl") || isfile("python_level_transition.json")
+        compare_level_transition_results(level_results, level_stats, "python_level_transition.pkl")
+    else
+        println("\n⚠ Python level transition results not found. Run test_python.py first.")
+    end
+    
+    if isfile("python_annihilation.pkl") || isfile("python_annihilation.json")
+        compare_annihilation_results(ann_results, ann_stats, "python_annihilation.pkl")
+    else
+        println("\n⚠ Python annihilation results not found. Run test_python.py first.")
+    end
+    
+    println("\n" * "="^60)
+    println("Julia tests completed!")
+    println("="^60)
+end
+
+# Run main if executed as script
+if abspath(PROGRAM_FILE) == @__FILE__
+    main()
+end

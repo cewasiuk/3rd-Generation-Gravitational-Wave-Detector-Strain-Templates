@@ -211,6 +211,10 @@ def strain_envelope(dist_GeV_inv, alpha, ne, ng, mu, gamma_t_GeV, Ng, Ne):
         Strain envelope h(t) (dimensionless).
     """
     omega_tr = 0.5 * mu * alpha**2 * ((1.0 / ng**2) - (1.0 / ne**2))
+    # print("\nomega_tr =", omega_tr)
+    # print("gamma_t =", gamma_t_GeV)
+    # print("Ng =", Ng, ", Ne =", Ne)
+    # print("G =", G, ", dist =", dist_GeV_inv, "\n")
     amp = np.sqrt(4.0 * G / (dist_GeV_inv**2 * omega_tr) *
                   gamma_t_GeV * Ng * Ne)
     return amp
@@ -645,6 +649,9 @@ def iso_gatom_level_tr_strain(
     omega_tr = 0.5 * mu_a * alpha**2 * ((1.0 / ng**2) - (1.0 / ne**2))
 
     # transition rate (GeV)
+    print("\n alpha =", alpha)
+    print(" omega_tr =", omega_tr)
+    print(" M =", M)
     gamma_t_ne_GeV = gamma_t_6g_to_5g(alpha, omega_tr, M)
     gamma_t_ne_yr  = gamma_t_ne_GeV * GeV_to_yrinv
 
@@ -686,6 +693,8 @@ def iso_gatom_level_tr_strain(
             Ne, Ng = Ne_next, Ng_next
 
             yr += j
+            #print("\n gamma_t_ne_GeV =", gamma_t_ne_GeV)
+
             h_val = strain_envelope(dist_GeV_inv, alpha, ne, ng,
                                     mu_a, gamma_t_ne_GeV, Ng, Ne)
 
