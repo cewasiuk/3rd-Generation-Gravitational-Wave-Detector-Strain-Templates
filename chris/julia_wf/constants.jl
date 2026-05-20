@@ -92,7 +92,7 @@ function super_gamma(n, l, m, mu, M, a; alpha_low=0.1, alpha_high=15.0)
 end
 
 function gamma_t_6g_to_5g(alpha, omega_tr, M)
-    C = (2^28 * 3^4 * 5^5) / (11^22 * pi)
+    C = (2. ^28 * 3. ^4 * 5. ^5) / (11. ^22 * pi)
     C *= (32 * pi / 15.0)
     P_t = C * G * alpha^12 / r_g(M)^4
     return P_t / omega_tr
