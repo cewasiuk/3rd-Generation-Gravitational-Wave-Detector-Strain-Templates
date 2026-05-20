@@ -125,8 +125,13 @@ def gamma_t_6g_to_5g(alpha, omega_tr, M):
     alpha: dimensionless coupling G M mu
     omega_tr: transition angular frequency in GeV
     """
+    print(f"alpha = {alpha:.3e}")
+    print(f"omega_tr = {omega_tr:.3e}")
+    print(f"M = {M:.3e} GeV")
     r_g = G * M
+    print(f"r_g = {r_g:.3e} GeV^-1")
     C = (2**28 * 3**4 * 5**5) / (11**22 * np.pi)
+    
     C *= (32*np.pi/15.0)   # ∫ sin^4θ dΩ
     P_t = C * (G * alpha**12) / (r_g**4)
     return P_t / omega_tr
@@ -210,6 +215,15 @@ def strain_envelope(dist_GeV_inv, alpha, ne, ng, mu, gamma_t_GeV, Ng, Ne):
     float
         Strain envelope h(t) (dimensionless).
     """
+    print(f"dist_GeV_inv = {dist_GeV_inv:.3e} GeV^-1")
+    print(f"alpha = {alpha:.3e}")
+    print(f"ne = {ne}")
+    print(f"ng = {ng}")
+    print(f"mu = {mu:.3e} GeV")
+    print(f"gamma_t_GeV = {gamma_t_GeV:.3e} GeV")
+    print(f"Ng = {Ng:.3e}")
+    print(f"Ne = {Ne:.3e}")
+
     omega_tr = 0.5 * mu * alpha**2 * ((1.0 / ng**2) - (1.0 / ne**2))
     amp = np.sqrt(4.0 * G / (dist_GeV_inv**2 * omega_tr) *
                   gamma_t_GeV * Ng * Ne)
@@ -646,6 +660,7 @@ def iso_gatom_level_tr_strain(
 
     # transition rate (GeV)
     gamma_t_ne_GeV = gamma_t_6g_to_5g(alpha, omega_tr, M)
+    print(f"Transition rate Γ_t (GeV) = {gamma_t_ne_GeV:.3e} GeV")
     gamma_t_ne_yr  = gamma_t_ne_GeV * GeV_to_yrinv
 
     # distance in GeV^-1
