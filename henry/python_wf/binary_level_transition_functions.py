@@ -1,9 +1,3 @@
-#!/usr/bin/env python
-# coding: utf-8
-
-# In[ ]:
-
-
 import numpy as np
 import math
 from scipy.integrate import dblquad, quad
@@ -13,6 +7,16 @@ from iminuit import Minuit
 from math import factorial
 #from numba import njit # Probably need to delete if converting into Julia, Julia does this already
 from scipy.special import gamma
+
+
+from scipy import interpolate
+from scipy import optimize
+from scipy.integrate import cumulative_trapezoid as cumtrapz
+from pathlib import Path
+import warnings
+from abc import ABCMeta, abstractmethod
+from cmath import sqrt as csqrt
+
 
 #=======================================
 #Natural Units
@@ -120,125 +124,628 @@ def eta_parameter(alpha, q, mass):
     eta = Omega0_binary_natural * np.abs(prefactor * (term1 + term2))
     return eta
 
+#=======================================
+#Numerical Calculation of the Cloud Mass q_c
+#=======================================
+
+
+#--------------Beginning of Numerical Calculation for Cloud Mass----------
+
+# -------------------------- base classes --------------------------
+class CloudModel(metaclass=ABCMeta):
+    @abstractmethod
+    def boson_spin(self):
+        pass
+    @abstractmethod
+    def max_azi_num(self):
+        pass
+    @abstractmethod
+    def max_spin(self):
+        pass
+    @abstractmethod
+    def omega_real(self, m, alpha, abh, Mcloud):
+        pass
+    @abstractmethod
+    def domegar_dmc(self, m, alpha, abh, Mcloud):
+        pass
+    @abstractmethod
+    def omega_imag(self, m, alpha, abh):
+        pass
+    @abstractmethod
+    def power_gw(self, m, alpha, abh):
+        pass
+    @abstractmethod
+    def strain_sph_harm(self, m, alpha, abh):
+        pass
+
+class BosonCloudWaveform(metaclass=ABCMeta):
+    @abstractmethod
+    def __init__(self, mu, Mbh0, abh0, cloud_model, units="natural"):
+        pass
+    @abstractmethod
+    def azimuthal_num(self):
+        pass
+    @abstractmethod
+    def mass_bh_final(self):
+        pass
+    @abstractmethod
+    def spin_bh_final(self):
+        pass
+    @abstractmethod
+    def efold_time(self):
+        pass
+    @abstractmethod
+    def cloud_growth_time(self):
+        pass
+    @abstractmethod
+    def mass_cloud(self, t):
+        pass
+    @abstractmethod
+    def power_gw(self, t):
+        pass
+    @abstractmethod
+    def gw_time(self):
+        pass
+    @abstractmethod
+    def freq_gw(self, t):
+        pass
+    @abstractmethod
+    def freqdot_gw(self, t):
+        pass
+    @abstractmethod
+    def strain_char(self, t, dObs=None):
+        pass
+    @abstractmethod
+    def strain_amp(self, t, thetaObs, dObs=None):
+        pass
+    @abstractmethod
+    def phase_gw(self, t):
+        pass
+
+# -------------------------- units --------------------------
+def set_units(units, Mbh0):
+    if units == "physical" or units == "physical+alpha":
+        tunit = 4.920551932748678e-06
+        Punit = 3.6283745e52
+        dunit = 4.78691895e-20
+        hbar = 1.19727031e-76
+        if units == "physical+alpha":
+            muunit = 1.0 / Mbh0
+        else:
+            muunit = 7.48548859e9
+    elif units == "natural" or units == "natural+alpha":
+        tunit = 1.0
+        Punit = 1.0
+        dunit = 1.0
+        hbar = 1.0
+        if units == "natural+alpha":
+            muunit = 1.0 / Mbh0
+        else:
+            muunit = 1.0
+    else:
+        raise ValueError("Invalid boson cloud waveform units")
+    return (tunit, Punit, dunit, hbar, muunit)
+
+def electron_mass(units):
+    if units == "physical" or units == "physical+alpha":
+        return 3.825076814891968e15
+    elif units == "natural" or units == "natural+alpha":
+        return 4.18543e-23
+    else:
+        raise ValueError("Invalid boson cloud waveform units")
+
+# -------------------------- spin‑weighted spherical harmonics --------------------------
+def fac(n):
+    result = 1
+    for i in range(2, n+1):
+        result *= i
+    return result
+
+def Cslm(s, l, m):
+    return np.sqrt(l*l * (4.0*l*l - 1.0) / ((l*l - m*m) * (l*l - s*s)))
+
+def s_lambda_lm(s, l, m, x):
+    Pm = pow(-0.5, m)
+    if m != s:
+        Pm = Pm * pow(1.0+x, (m-s)*1.0/2)
+    if m != -s:
+        Pm = Pm * pow(1.0-x, (m+s)*1.0/2)
+    Pm = Pm * np.sqrt(fac(2*m+1) * 1.0 / (4.0*np.pi * fac(m+s) * fac(m-s)))
+    if l == m:
+        return Pm * np.ones_like(x)
+    Pm1 = (x + s*1.0/(m+1)) * Cslm(s, m+1, m) * Pm
+    if l == m+1:
+        return Pm1
+    else:
+        for n in range(m+2, l+1):
+            Pn = (x + s*m*1.0/(n*(n-1.0))) * Cslm(s, n, m) * Pm1 - Cslm(s, n, m) * 1.0 / Cslm(s, n-1, m) * Pm
+            Pm = Pm1
+            Pm1 = Pn
+        return Pn
+
+def sYlm(ss, ll, mm, theta):
+    l = ll
+    m = mm
+    s = ss
+    if l < 0:
+        return 0
+    if abs(m) > l or l < abs(s):
+        return 0
+    Pm = 1.0
+    if abs(mm) < abs(ss):
+        s = mm
+        m = ss
+        if (m+s) % 2:
+            Pm = -Pm
+    if m < 0:
+        s = -s
+        m = -m
+        if (m+s) % 2:
+            Pm = -Pm
+    result = Pm * s_lambda_lm(s, l, m, np.cos(theta))
+    return result
+
+# -------------------------- relativistic scalar cloud model --------------------------
+class RelScalar(CloudModel):
+    def __init__(self, nonrel_freq_shift=False):
+        # m=1 modes
+        m1_data = np.load(Path(__file__).parent.joinpath('data/m1_sc_mds.npz'))
+        m1_wr = m1_data['wr'].flatten()
+        m1_wi = m1_data['wi'].flatten()
+        m1_a = m1_data['a'].flatten()
+        m1_y = m1_data['y'].flatten()
+        self._f1wr = interpolate.LinearNDInterpolator(list(zip(m1_y,m1_a)),m1_wr)
+        self._f1wi = interpolate.LinearNDInterpolator(list(zip(m1_y,m1_a)),m1_wi)
+        self._nonrel_freq_shift = nonrel_freq_shift
+
+        if not self._nonrel_freq_shift:
+            shift_data = np.load(Path(__file__).parent.joinpath('data/scalar_freqshift_m1_interp.npz'))
+            alpha = shift_data['alpha'].flatten()
+            lin_shift = shift_data['lin_shift'].flatten()
+            quad_shift = shift_data['quad_shift'].flatten()
+            self._max_numeric_alpha = 0.57
+            self._lin_shift = interpolate.interp1d(alpha, lin_shift, kind='cubic')
+            self._quad_shift = interpolate.interp1d(alpha, quad_shift, kind='cubic')
+            self._min_numericalfit_alpha = 0.23
+            self._min_numericalfitandinterp_alpha = 0.200067
+            self._max_numeric_alpha = max(alpha)
+
+        # m=2 modes
+        m2_data = np.load(Path(__file__).parent.joinpath('data/m2_sc_mds.npz'))
+        m2_wr = m2_data['wr'].flatten()
+        m2_wi = m2_data['wi'].flatten()
+        m2_a = m2_data['a'].flatten()
+        m2_y = m2_data['y'].flatten()
+        self._f2wr = interpolate.LinearNDInterpolator(list(zip(m2_y,m2_a)),m2_wr)
+        self._f2wi = interpolate.LinearNDInterpolator(list(zip(m2_y,m2_a)),m2_wi)
+
+        # Fit coefficients
+        fit_data = np.load(Path(__file__).parent.joinpath('data/sc_fits.npz'))
+        self._amat1 = fit_data['amat1']
+        self._bmat1 = fit_data['bmat1']
+        self._cmat1 = fit_data['cmat1']
+        self._amat2 = fit_data['amat2']
+        self._bmat2 = fit_data['bmat2']
+        self._cmat2 = fit_data['cmat2']
+
+        # Radiation data
+        sat_flux_data = np.load(Path(__file__).parent.joinpath('data/sc_sat_gw.npz'))
+        m1_flux = sat_flux_data['m1_flux']
+        m1_mu = sat_flux_data['m1_mu']
+        m1_Z2r = sat_flux_data['m1_z2r']
+        m1_Z2i = sat_flux_data['m1_z2i']
+        m1_Z3r = sat_flux_data['m1_z3r']
+        m1_Z3i = sat_flux_data['m1_z3i']
+        m2_flux = sat_flux_data['m2_flux']
+        m2_mu = sat_flux_data['m2_mu']
+        m2_Z4r = sat_flux_data['m2_z4r']
+        m2_Z4i = sat_flux_data['m2_z4i']
+        m2_Z5r = sat_flux_data['m2_z5r']
+        m2_Z5i = sat_flux_data['m2_z5i']
+        self._pwm1 = interpolate.interp1d(m1_mu, m1_flux, kind='cubic')
+        self._z2rm1 = interpolate.interp1d(m1_mu, m1_Z2r, kind='cubic')
+        self._z2im1 = interpolate.interp1d(m1_mu, m1_Z2i, kind='cubic')
+        self._z3rm1 = interpolate.interp1d(m1_mu, m1_Z3r, kind='cubic')
+        self._z3im1 = interpolate.interp1d(m1_mu, m1_Z3i, kind='cubic')
+        self._pwm2 = interpolate.interp1d(m2_mu, m2_flux, kind='cubic')
+        self._z4rm2 = interpolate.interp1d(m2_mu, m2_Z4r, kind='cubic')
+        self._z4im2 = interpolate.interp1d(m2_mu, m2_Z4i, kind='cubic')
+        self._z5rm2 = interpolate.interp1d(m2_mu, m2_Z5r, kind='cubic')
+        self._z5im2 = interpolate.interp1d(m2_mu, m2_Z5i, kind='cubic')
+
+        self._nonrel_freq_spincomponent_m1 = 0.0028391854462700
+        self._nonrel_freq_spincomponent_m2 = 0.0024403837275569847
+        self._omegai_nonrel_alpha12fac_m2 = -1.1948426572069112e11
+        self._omegai_nonrel_alpha13fac_m2 = 2.609027546773062e12
+        self._gwpower_nonrel_m1_a14 = 0.0109289473739731
+        self._gwpower_nonrel_m1_a15 = -0.0290105840870259
+        self._gwpower_nonrel_m2_a18 = 6.46575425669374e-7
+        self._gwpower_nonrel_m2_a19 = -1.12205283686066e-6
+        self._aswitchval = 0.6
+
+        self._freqshift_nonrel_extrapfromreldata_Mcalpha4 = -0.03370322
+        self._freqshift_nonrel_extrapfromreldata_Mcalpha5 = -0.18433376
+        self._freqshift_nonrel_extrapfromreldata_Mcalpha6 = -0.2922884
+        self._freqshift_nonrel_extrapfromreldata_Mc2alpha4 = -0.35184631
+        self._freqshift_nonrel_extrapfromreldata_Mc2alpha5 = 0.13244306
+        self._freqshift_nonrel_extrapfromreldata_Mc2alpha6 = 0
+        self._freqshift_highalpha_extrapfromreldata_Mcalpha4 = -0.70667268
+        self._freqshift_highalpha_extrapfromreldata_Mcalpha5 = 3.30927045
+        self._freqshift_highalpha_extrapfromreldata_Mcalpha6 = -4.92869613
+        self._freqshift_highalpha_extrapfromreldata_Mc2alpha4 = 1.0725927
+        self._freqshift_highalpha_extrapfromreldata_Mc2alpha5 = -3.44415853
+        self._freqshift_highalpha_extrapfromreldata_Mc2alpha6 = 0
+
+    def boson_spin(self):
+        return 0
+    def max_azi_num(self):
+        return 2
+    def max_spin(self):
+        return 0.995
+    def omega_real(self, m, alpha, abh, Mcloud):
+        yl, alphamax, Oh = self._y(m, alpha, abh)
+        dwr = self._deltaomega(m, alpha, abh, Mcloud)*Mcloud
+        if m == 1:
+            if alpha >= 0.05 and abh >= self._aswitch(m):
+                wr = alpha * self._f1wr(yl, abh)
+            else:
+                if not self._maxalphaInterp(m, alpha):
+                    return np.nan
+                wr = alpha*(1.0 - alpha**2/8.0 - 17.0*alpha**4/128.0 + abh*alpha**5/12.0)
+                wr += alpha*self._nonrel_freq_spincomponent_m1*alpha**5*(abh*np.sqrt(1-abh**2)-abh)
+                for p in range(6,9):
+                    for q in range(0,4):
+                        wr += alpha**(p+1)*(1.0-abh**2)**(q/2.0)*self._amat1[p-6,q]
+            return wr + dwr
+        elif m == 2:
+            if alpha >= 0.25 and abh >= self._aswitch(m):
+                wr = alpha * self._f2wr(yl, abh)
+            else:
+                if not self._maxalphaInterp(m, alpha):
+                    return np.nan
+                wr = alpha*(1.0 - alpha**2/18.0 - 23.0*alpha**4/1080.0 + 4.0*abh*alpha**5/405.0)
+                wr += alpha*self._nonrel_freq_spincomponent_m2*alpha**5*(abh*np.sqrt(1-abh**2)-abh)
+                for p in range(6,9):
+                    for q in range(0,4):
+                        wr += alpha**(p+1)*(1.0-abh**2)**(q/2.0)*self._amat2[p-6,q]
+            return wr + dwr
+        else:
+            raise ValueError("Azimuthal index too large")
+    def domegar_dmc(self, m, alpha, abh, Mcloud):
+        return self._lin_shift_withextrap(m,alpha,abh) + 2*self._quad_shift_withextrap(m,alpha,abh)*Mcloud
+    def omega_imag(self, m, alpha, abh):
+        yl, alphamax, Oh = self._y(m, alpha, abh)
+        wr = self.omega_real(m, alpha, abh, 0)
+        if m == 1:
+            if alpha >= 0.05 and abh >= self._aswitch(m):
+                return -np.exp(self._f1wi(yl, abh))*(wr - m*Oh)
+            else:
+                wi = 1.0
+                glm = 1-abh**2 + (abh*m - 2.0*wr*(1.0+np.sqrt(1.0-abh**2)))**2
+                for p in range(1,4):
+                    for q in range(0,4):
+                        wi += alpha**p*(abh**(q+1)*self._bmat1[q,p-1] + self._cmat1[q,p-1]*(1.0-abh**2)**(q/2.0))
+                wi *= -2.0*(1.0+np.sqrt(1.0-abh**2))*glm*alpha**9*(wr - m*Oh)/48.0
+                return wi
+        elif m == 2:
+            if alpha >= 0.25 and abh >= self._aswitch(m):
+                return -np.exp(self._f2wi(yl, abh))*(wr - m*Oh)
+            else:
+                wi = 1.0
+                glm = 1-abh**2 + (2.0*abh - 2.0*wr*(1.0+np.sqrt(1.0-abh**2)))**2
+                glm *= 4.0*(1-abh**2) + (2.0*abh - 2.0*wr*(1.0+np.sqrt(1.0-abh**2)))**2
+                wi += self._omegai_nonrel_alpha12fac_m2*alpha**12 + self._omegai_nonrel_alpha13fac_m2*alpha**13
+                for p in range(12,23):
+                    wi += self._cmat2[p-12]*alpha**p*(1.0-abh**2)**0.5
+                    for q in range(0,3):
+                        wi += alpha**(p+2)*abh**q*self._bmat2[q,p-12]
+                wi *= -2.0*(1.0+np.sqrt(1.0-abh**2))*glm*alpha**13*(wr - m*Oh)*4.0/885735.0
+                return wi
+        else:
+            raise ValueError("Azimuthal index too large")
+    def power_gw(self, m, alpha, abh):
+        if m == 1:
+            if alpha < 0.2:
+                return self._gwpower_nonrel_m1_a14*alpha**14 + self._gwpower_nonrel_m1_a15*alpha**15
+            else:
+                return self._pwm1(alpha)
+        elif m == 2:
+            if alpha < 0.34:
+                return self._gwpower_nonrel_m2_a18*alpha**18 + self._gwpower_nonrel_m2_a19*alpha**19
+            else:
+                return self._pwm2(alpha)
+        else:
+            raise ValueError("Azimuthal index too large")
+    def strain_sph_harm(self, m, alpha, abh):
+        spsat = self._spinsat(m, alpha)
+        wr = 2.0*self.omega_real(m, alpha, spsat, 0)
+        if m == 1:
+            if alpha < 0.2:
+                z2abs = 2.0*np.pi*np.sqrt(wr**2*self.power_gw(m, alpha, spsat))
+                return 2.0*np.array([z2abs,0])/(np.sqrt(2.0*np.pi)*wr**2)
+            else:
+                z2 = self._z2rm1(alpha)+1j*self._z2im1(alpha)
+                z3 = self._z3rm1(alpha)+1j*self._z3im1(alpha)
+                return -2.0*np.array([z2, z3])/(np.sqrt(2.0*np.pi)*wr**2)
+        elif m == 2:
+            if alpha < 0.34:
+                z4abs = 2.0*np.pi*np.sqrt(wr**2*self.power_gw(m, alpha, spsat))
+                return 2.0*np.array([z4abs,0])/(np.sqrt(2.0*np.pi)*wr**2)
+            else:
+                z4 = self._z4rm2(alpha)+1j*self._z4im2(alpha)
+                z5 = self._z5rm2(alpha)+1j*self._z5im2(alpha)
+                return -2.0*np.array([z4, z5])/(np.sqrt(2.0*np.pi)*wr**2)
+        else:
+            raise ValueError("Azimuthal index too large")
+    def _aswitch(self, m):
+        return self._aswitchval
+    def _maxalphaInterp(self, m, alpha):
+        if m == 1:
+            return alpha < 0.18
+        elif m == 2:
+            return alpha < 0.4
+        else:
+            raise ValueError("Azimuthal index too large")
+    def _y(self, m, alpha, abh, beta=0.9):
+        if m == 1:
+            alpha0 = 0.05
+        else:
+            alpha0 = 0.25
+        Oh = 0.5*abh/(1.0+np.sqrt(1.0-abh**2))
+        temp = 9.0*m*(m+1)**2*Oh*beta**2 + csqrt(81*m**2*(1+m)**4*Oh**2*beta**4 - 24*(1+m)**6*beta**6)
+        alphamaxC = ((3**(1.0/3.0)+1j*3**(5.0/6.0))*temp**(2.0/3.0) - 4.0*(-3.0)**(2.0/3.0)*(m+1)**2*beta**2) / (6.0*temp**(1.0/3.0)*beta)
+        alphamax = alphamaxC.real
+        yl = (alpha - alpha0)/(alphamax - alpha0)
+        return yl, alphamax, Oh
+    def _deltaomega(self,m,alpha,abh,Mcloud):
+        return self._lin_shift_withextrap(m,alpha,abh) + self._quad_shift_withextrap(m,alpha,abh)*Mcloud
+    def _alphasat(self, m, abh):
+        yh, amaxh, Ohh = self._y(m, 0, abh)
+        yl, amaxl, Ohl = self._y(m, 0, abh, 1.1)
+        def _sat(al):
+            satout = self.omega_real(m, al, abh, 0) - m*0.5*abh/(1.0+np.sqrt(1.0-abh**2))
+            if np.isnan(satout):
+                satout = 1e10
+            return satout
+        return optimize.bisect(_sat, amaxl, amaxh)
+    def _spinsat(self, m, al, mc=0):
+        mcin = mc
+        def _sat(abh):
+            satout = self.omega_real(m, al, abh, mcin) - m*0.5*abh/(1.0+np.sqrt(1.0-abh**2))
+            if np.isnan(satout):
+                satout = 1e10
+            return satout
+        return optimize.bisect(_sat, self.max_spin(), 0)
+    def _shift_factor(self,m):
+        coeffs = [-(93/1024), -(793/18432), -(26333/1048576), -(43191/2621440), -(
+            1172755/100663296), -(28539857/3288334336), -(1846943453/
+            274877906944), -(14911085359/2783138807808), -(240416274739/
+            54975581388800), -(1936010885087/532163627843584), -(62306843256889/
+            20266198323167232), -(500960136802799/190277084256403456), -(
+            8051112929645937/3530822107858468864), -(21555352563374699/
+            10808639105689190400), -(8307059966383480541/4722366482869645213696)]
+        return coeffs[m-1]
+    def _lin_shift_withextrap(self, m, alpha, abh):
+        if m == 1 and not self._nonrel_freq_shift:
+            non_rel = 2.0*self._shift_factor(m)*alpha**3
+            extrap_ha = non_rel + self._freqshift_highalpha_extrapfromreldata_Mcalpha4*alpha**4 + self._freqshift_highalpha_extrapfromreldata_Mcalpha5*alpha**5 + self._freqshift_highalpha_extrapfromreldata_Mcalpha6*alpha**6
+            extrap = non_rel + self._freqshift_nonrel_extrapfromreldata_Mcalpha4*alpha**4 + self._freqshift_nonrel_extrapfromreldata_Mcalpha5*alpha**5 + self._freqshift_nonrel_extrapfromreldata_Mcalpha6*alpha**6
+            if alpha > self._min_numericalfitandinterp_alpha and alpha <= self._max_numeric_alpha:
+                if alpha > 0.23:
+                    return self._lin_shift(alpha)
+                else:
+                    return (self._lin_shift(alpha)*(alpha - self._min_numericalfitandinterp_alpha)/(self._min_numericalfit_alpha - self._min_numericalfitandinterp_alpha) +
+                            extrap*(1.0 - (alpha - self._min_numericalfitandinterp_alpha)/(self._min_numericalfit_alpha - self._min_numericalfitandinterp_alpha)))
+            elif alpha <= self._min_numericalfitandinterp_alpha:
+                return extrap
+            elif alpha > self._max_numeric_alpha:
+                return extrap_ha
+        else:
+            return 2.0*self._shift_factor(m)*alpha**3
+    def _quad_shift_withextrap(self, m, alpha, abh):
+        if m == 1 and not self._nonrel_freq_shift:
+            extrap_ha = (self._freqshift_highalpha_extrapfromreldata_Mc2alpha4*alpha**4 +
+                         self._freqshift_highalpha_extrapfromreldata_Mc2alpha5*alpha**5 +
+                         self._freqshift_highalpha_extrapfromreldata_Mc2alpha6*alpha**6)
+            extrap = (self._freqshift_nonrel_extrapfromreldata_Mc2alpha4*alpha**4 +
+                      self._freqshift_nonrel_extrapfromreldata_Mc2alpha5*alpha**5 +
+                      self._freqshift_nonrel_extrapfromreldata_Mc2alpha6*alpha**6)
+            if alpha >= self._min_numericalfitandinterp_alpha and alpha <= self._max_numeric_alpha:
+                if alpha > 0.23:
+                    return self._quad_shift(alpha)
+                else:
+                    return (self._quad_shift(alpha)*(alpha - self._min_numericalfitandinterp_alpha)/(self._min_numericalfit_alpha - self._min_numericalfitandinterp_alpha) +
+                            extrap*(1.0 - (alpha - self._min_numericalfitandinterp_alpha)/(self._min_numericalfit_alpha - self._min_numericalfitandinterp_alpha)))
+            elif alpha < self._min_numericalfitandinterp_alpha:
+                return extrap
+            elif alpha > self._max_numeric_alpha:
+                return extrap_ha
+        else:
+            return 0
+
+# -------------------------- matched waveform --------------------------
+class MatchedWaveform(BosonCloudWaveform):
+    def __init__(self, mu, Mbh0, abh0, cloud_model, units="natural"):
+        if not isinstance(cloud_model, CloudModel):
+            raise TypeError
+        if mu<0 or Mbh0<0 or abh0<=0 or abh0>cloud_model.max_spin():
+            raise ValueError("Invalid boson cloud waveform parameters")
+        self._tunit, self._Punit, self._dunit, self._hbar, mu_fac = set_units(units, Mbh0)
+        mu = mu_fac * mu
+        mmax = cloud_model.max_azi_num()
+        rp0 = Mbh0 + np.sqrt(Mbh0**2 - (abh0*Mbh0)**2)
+        OmegaBH0 = 0.5 * abh0 / rp0
+        m = 1
+        omega0 = cloud_model.omega_real(m, mu*Mbh0, abh0, 0)/Mbh0
+        while not (omega0 < m*OmegaBH0):
+            m += 1
+            if m > mmax:
+                break
+            else:
+                omega0 = cloud_model.omega_real(m, mu*Mbh0, abh0, 0)/Mbh0
+        if m > mmax:
+            raise ValueError("Error, azimuthal number > %d not supported." % mmax)
+        Jbh0 = abh0 * Mbh0**2
+        omegaR = 1.0 * omega0
+        omegaRprevious = 0.0
+        rel_omega_tol = 1.0e-10
+        max_iter = 100
+        i = 0
+        while abs(omegaRprevious-omegaR) > rel_omega_tol*mu and i < max_iter:
+            omegaRprevious = 1.0 * omegaR
+            Mbhf = (m**3 - np.sqrt(m**6 - 16.0*m**2*omegaR**2*(m*Mbh0 - omegaR*Jbh0)**2)) / (8.0*omegaR**2*(m*Mbh0 - omegaR*Jbh0))
+            Jbhf = Jbh0 - m/omegaR * (Mbh0 - Mbhf)
+            omegaR = cloud_model.omega_real(m, mu*Mbhf, Jbhf/Mbhf**2, (Mbh0-Mbhf)/Mbhf)/Mbhf
+            i += 1
+        if i >= max_iter:
+            warnings.warn(("Saturation condition only satisfied up to relative difference of %e" % (abs(omegaRprevious-omegaR)/mu)), RuntimeWarning)
+        self._Mbh0 = Mbh0
+        self._abh0 = abh0
+        self._omegaR0 = omega0
+        self._omegaR = omegaR
+        self._Mbh = Mbhf
+        self._Mcloud0 = Mbh0 - Mbhf
+        self._abh = Jbhf / self._Mbh**2
+        self._m = m
+        self._mu = mu
+        self._cloud_model = cloud_model
+        self._Pgwt = self._cloud_model.power_gw(self._m, self._mu*self._Mbh, self._abh)
+        self._hl = self._cloud_model.strain_sph_harm(self._m, self._mu*self._Mbh, self._abh)
+        self._tauI = self._Mbh0 / (2*self._cloud_model.omega_imag(self._m, self._mu*self._Mbh0, self._abh0))
+
+    def azimuthal_num(self):
+        return self._m
+    def mass_bh_final(self):
+        return self._Mbh
+    def spin_bh_final(self):
+        return self._abh
+    def efold_time(self):
+        return self._tauI * self._tunit
+    def cloud_growth_time(self):
+        return self.efold_time() * np.log(self._Mcloud0 / (self._mu * self._hbar))
+    def mass_cloud(self, t):
+        t = t / self._tunit
+        tnorm = t * self._Pgwt * self._Mcloud0 / self._Mbh**2
+        H = np.heaviside(tnorm, 1.0)
+        treg = (1.0 - H) * t
+        return H * self._Mcloud0/(1+tnorm) + (1.0-H) * self._Mcloud0 * np.exp(treg/self._tauI)
+    def _mass_cloud_dot(self, t):
+        t = t / self._tunit
+        tnorm = t * self._Pgwt * self._Mcloud0 / self._Mbh**2
+        H = np.heaviside(tnorm, 1.0)
+        treg = (1.0 - H) * t
+        Mcdot_p = (self._Mcloud0/(1+tnorm))**2 * (-1.0*self._Pgwt/self._Mbh**2)
+        Mcdot_n = self._Mcloud0 * np.exp(treg/self._tauI) / self._tauI
+        return H * Mcdot_p + (1.0-H) * Mcdot_n
+    def power_gw(self, t):
+        Mc = self.mass_cloud(t)
+        return self._Punit * self._Pgwt * (Mc)**2 / self._Mbh**2
+    def gw_time(self):
+        return self._tunit * self._Mbh**2 / (self._Pgwt * self._Mcloud0)
+    def freq_gw(self, t):
+        Mc = self.mass_cloud(t)
+        omegaR_vec = np.vectorize(self._cloud_model.omega_real, excluded=[0,1,2])
+        H = np.heaviside(t, 1.0)
+        fgw = (H * omegaR_vec(self._m, self._mu*self._Mbh, self._abh, Mc/self._Mbh)/self._Mbh
+               + (1.0-H) * (self._omegaR + (self._omegaR - self._omegaR0)*(Mc/self._Mcloud0 - 1))
+              ) / np.pi
+        return fgw / self._tunit
+    def freqdot_gw(self, t):
+        Mc = self.mass_cloud(t)
+        Mcdot = self._mass_cloud_dot(t)
+        domegaRdMc_vec = np.vectorize(self._cloud_model.domegar_dmc, excluded=[0,1,2])
+        H = np.heaviside(t, 1.0)
+        fdotgw = (H * domegaRdMc_vec(self._m, self._mu*self._Mbh, self._abh, Mc/self._Mbh)/self._Mbh**2 * Mcdot
+                  + (1.0-H) * (self._omegaR - self._omegaR0) * Mcdot / self._Mcloud0) / np.pi
+        return fdotgw / self._tunit**2
+    def strain_char(self, t, dObs=None):
+        if dObs is None:
+            dObs = self._Mbh
+        else:
+            dObs = dObs / self._dunit
+        Mc = self.mass_cloud(t)
+        omegaR_vec = np.vectorize(self._cloud_model.omega_real, excluded=[0,1,2])
+        omegagw = 2.0 * omegaR_vec(self._m, self._mu*self._Mbh, self._abh, Mc/self._Mbh) / self._Mbh
+        h0 = np.sqrt(10.0 * self._Pgwt * (Mc)**2 / self._Mbh**2) / dObs / omegagw
+        return h0
+    def strain_amp(self, t, thetaObs, dObs=None):
+        if dObs is None:
+            dObs = self._Mbh
+        else:
+            dObs = dObs / self._dunit
+        Mc = self.mass_cloud(t)
+        hp = 0.0
+        hx = 0.0
+        l = 2 * self._m
+        for hl0 in self._hl:
+            Yp = sYlm(-2, l, 2*self._m, thetaObs)
+            Ym = sYlm(-2, l, -2*self._m, thetaObs)
+            hp += hl0 * (Yp + (-1)**l * Ym)
+            hx += hl0 * (Yp - (-1)**l * Ym)
+            l += 1
+        delta = np.angle(hx) - np.angle(hp)
+        delta = (delta + np.pi) % (2*np.pi) - np.pi
+        hp = np.abs(hp) * (Mc/self._Mbh) / (dObs/self._Mbh)
+        hx = np.abs(hx) * (Mc/self._Mbh) / (dObs/self._Mbh)
+        return hp, hx, delta
+    def phase_gw(self, t):
+        t = t / self._tunit
+        tau = self._Mbh**2 / (self._Pgwt * self._Mcloud0)
+        domegaRdMc_const_t0 = self._cloud_model.domegar_dmc(self._m, self._mu*self._Mbh, self._abh, 0) / self._Mbh**2
+        domegaRdMc_lin_t0 = (self._cloud_model.domegar_dmc(self._m, self._mu*self._Mbh, self._abh, self._Mcloud0)/(self._Mbh**3) -
+                             self._cloud_model.domegar_dmc(self._m, self._mu*self._Mbh, self._abh, 0)/self._Mbh**3) / (2 * self._Mcloud0)
+        omega_M0 = self._cloud_model.omega_real(self._m, self._mu*self._Mbh, self._abh, 0)/self._Mbh
+        H = np.heaviside(t, 1.0)
+        treg = (1.0 - H) * t
+        phi = 2.0 * (H * (omega_M0*t + domegaRdMc_const_t0*self._Mcloud0*tau*np.log(1.0 + t/tau) +
+                          domegaRdMc_lin_t0*self._Mcloud0**2*tau*(t/(t+tau))) +
+                     (1.0-H) * (self._omegaR0*t + (self._omegaR - self._omegaR0)*self._tauI*(np.exp(treg/self._tauI)-1.0)))
+        return phi
+
+# -------------------------- classes --------------------------
+class UltralightBoson(object):
+    def __init__(self, spin=1, model="relativistic", nonrel_freq_shift=False):
+        if spin not in (0,1):
+            raise ValueError("Spin value %d not supported" % spin)
+        if model == "non-relativistic":
+            raise NotImplementedError("Non‑relativistic models are not included in this standalone version.")
+        elif model == "relativistic":
+            if spin == 0:
+                self._cloud_model = RelScalar(nonrel_freq_shift=nonrel_freq_shift)
+            elif spin == 1:
+                raise NotImplementedError("Spin‑1 relativistic model is not included.")
+        else:
+            raise ValueError("Model %s not supported" % model)
+
+    def make_waveform(self, Mbh, abh, mu, units="physical", evo_type="matched"):
+        if evo_type != "matched":
+            raise NotImplementedError("Only 'matched' waveform is supported in this standalone version.")
+        return MatchedWaveform(mu, Mbh, abh, self._cloud_model, units=units)
+#------------------------------------------Calling Function in Plot----------------------------------
+def compute_cloud_mass_numerical(alpha, M, boson_mass, spin=0.99):#double check why did we use 0.99? Because this is what is set in thepaper
+   
+    
+    bc0 = UltralightBoson(spin=0, model="relativistic")
+    
+    #------unit conversions for M from eV to Solar Mass---------#
+    eV_per_kg = 1.782622e-36
+    mP_in_eV = 1e9*mP_in_GeV # eV
+    Msol_in_kg = 1.99841e30 # kg
+    Msol_in_eV = Msol_in_kg/eV_per_kg # eV
+    #----------------------------------------
+    
+    M = M / Msol_in_eV
+    
+    wf0 = bc0.make_waveform(M, spin, boson_mass, units="physical") # unit = "physical" uses has Mass in Solar Mass, boson_mass in eV!
+    return wf0.mass_cloud(0)*Msol_in_eV #Turning this into eV! #* ORIGINAL .mass_cloud(0) returns SOLAR MASS!#turning this into eV,
+
+#--------------------End of Numerical Calculation for Cloud Model----------------------
+
 
 
 #=======================================
 #Functions for calculating Relativitistic Gamma Rate from BHSR starts here
 #=======================================
-
-
-def a_tilde_crit(m_i, alpha): #This is in very close agreement with numerical calculation, so we elect to use analytical form here
-    m2 = m_i**2
-    return (4.0 * m_i * alpha) / (m2 + 4.0 * alpha**2)
-
-
-def q_c(alpha, m_i):
-
-    m = float(m_i)
-    one_minus = (1.0 - alpha / m)
-    # guard small rounding errors inside the sqrt:
-    inner = 1.0 - (4.0 * alpha / m * one_minus) ** 2
-    #inner = np.clip(inner, 0.0, 1.0)
-
-    denom = m**2 * (1.0 - np.sqrt(inner))
-    # Avoid divide-by-zero:
-    if denom == 0.0:
-        return 0.0
-
-    return 8.0 * alpha**2 * one_minus / denom - 1# see if we want to convert this into numerical as well # you don't
-
-
-# M is host BH mass
-# Omega_0 is angular momentum at BH horizon
-
-def h0_from_params(qc, M, r, alpha, Omega0): 
-
-    return 24.0 * G*(qc * M / r) * (alpha ** -4) * (G*M * Omega0) ** 2
-
-def gamma_rate(q, M, Omega0):
-    return (Omega0**2) * (96.0 / 5.0) * (q / (q + 1.0) ** (1.0 / 3.0)) * (G * M * Omega0) ** (5.0 / 3.0) 
-
-
-
-def z_parameter(eta, Delta_m, gamma):
-    return (eta ** 2) / (abs(Delta_m) * gamma)
-
-
-def z_scaling_211_to_21m1(alpha, q):
-    """
-    z_{211->21-1} ≈ 7 * (1.81/(1+4 α^2))^(1/3) * (q)^(1/3) * (2/(1+q))^(5/3) * (0.45/α)^(11/3)
-    """
-    return 7.0 * (1.81 / (1.0 + 4.0 * alpha**2)) ** (1.0 / 3.0) \
-             * (q ** (1.0 / 3.0)) \
-             * (2.0 / (1.0 + q)) ** (5.0 / 3.0) \
-             * (0.45 / alpha) ** (11.0 / 3.0)
-
-
-
-def fc_from_Omega0(Omega0):
-    return (2.0 / np.pi) * Omega0
-
-def psi_plus(f, r, f0, Delta_m, gamma):
-    return f * r + ((f - f0) ** 2) / (4.0 * abs(Delta_m) * gamma) - np.pi / 4.0
-
-
-
-def htilde_plus(
-    f,  # array-like (Hz in your chosen units)
-    #iota, #binary inclination
-    M, r, alpha,           # source mass, distance, fine-structure parameter
-    Omega0,                # orbital frequency scale
-    q,                     # binary mass ratio (companion/host)
-    m_i, m_f,              # initial/final magnetic quantum numbers (e.g., 1 -> -1)
-    eta,                   # parameter entering z (or leave None to use z_scaling below)
-    Gamma_abs,             # |Γ| > 0 (same units as f)
-    use_z_scaling=False    # if True, use Eq. (15.5) instead of z=η^2/(|Δm|γ)
-):
-    f = np.asarray(f, dtype=float)
-    Delta_m = abs(m_f - m_i)
-
-    # ã_crit and q_c
-    acrit = a_tilde_crit(m_i, alpha)
-    qc = q_c(alpha, m_i)
-    #qc=0.093 add numerical if possible
-
-    # h0 amplitude (15.12)
-    h0 = h0_from_params(qc, M, r, alpha, Omega0)
-
-    # gamma (15.9)
-    gamma = gamma_rate(q, M, Omega0)
-
-    # z (15.1) or scaling (15.5)
-    if use_z_scaling:
-        z = z_scaling_211_to_21m1(alpha, q)
-    else:
-        z = z_parameter(eta, Delta_m, gamma)
-
-    # central frequency and phase (under 15.15)
-    f_c = fc_from_Omega0(Omega0)
-    f0 = f_c
-    # print(f'{f0:.4}')
-    phase = psi_plus(f, r, f0, Delta_m, gamma)
-
-    # denominator and envelope
-    denom = np.sqrt(z) / (abs(Gamma_abs) - 1j * np.pi * (f - f_c))
-    envelope = np.exp(-np.pi * z) * np.exp(-2.0 * z * np.arctan(np.pi * (f - f_c) / abs(Gamma_abs)))
-
-    # assemble, need factor of G to account for units of denominator gamma and freq ( 1/Hz = GeV, therefore need 1/Gev, -> sqrt(G)=1/Mp)
-    #pref = h0 * (1.0 + np.cos(0.0)**2)* np.sqrt(np.pi) * (Delta_m ** 2)  # placeholder; will be overwritten below
-    # Fix: include actual inclination:
-    def with_inclination(iota):
-        pref = h0*(1.0 + np.cos(iota) ** 2) * np.sqrt(np.pi) * (Delta_m ** 2)
-
-        return np.abs(pref * 1j * np.exp(1j * phase) * envelope * denom) / 2.417987242e14
-    # For troubleshooting below
-    # print(f'h0 is: {h0}')
-    # print(f'Prefix is: {pref}')
-    # print(f'envelope is: {max(envelope)}')
-    # print(f'denom is: {min(denom)}')
-    return with_inclination
-
-
 
 ##===============================
 #Subsection 
@@ -1045,5 +1552,131 @@ def cfm_bhsr_rates(mbh0, mu_max):
 
 #------------- End of Relativitistic Gamma Rate from BHSR-------------------------
 
-#------------------------------------------------------------------
 
+
+#=======================================
+# Binary Transition Waveforms
+#=======================================
+
+
+def a_tilde_crit(m_i, alpha): #This is in very close agreement with numerical calculation, so we elect to use analytical form here
+    m2 = m_i**2
+    return (4.0 * m_i * alpha) / (m2 + 4.0 * alpha**2)
+
+
+def q_c(alpha, m_i):
+
+    m = float(m_i)
+    one_minus = (1.0 - alpha / m)
+    # guard small rounding errors inside the sqrt:
+    inner = 1.0 - (4.0 * alpha / m * one_minus) ** 2
+    #inner = np.clip(inner, 0.0, 1.0)
+
+    denom = m**2 * (1.0 - np.sqrt(inner))
+    # Avoid divide-by-zero:
+    if denom == 0.0:
+        return 0.0
+
+    return 8.0 * alpha**2 * one_minus / denom - 1# see if we want to convert this into numerical as well # you don't
+
+
+# M is host BH mass
+# Omega_0 is angular momentum at BH horizon
+
+def h0_from_params(qc, M, r, alpha, Omega0): 
+
+    return 24.0 * G*(qc * M / r) * (alpha ** -4) * (G*M * Omega0) ** 2
+
+def gamma_rate(q, M, Omega0):
+    return (Omega0**2) * (96.0 / 5.0) * (q / (q + 1.0) ** (1.0 / 3.0)) * (G * M * Omega0) ** (5.0 / 3.0) 
+
+
+
+def z_parameter(eta, Delta_m, gamma):
+    return (eta ** 2) / (abs(Delta_m) * gamma)
+
+
+def z_scaling_211_to_21m1(alpha, q):
+    """
+    z_{211->21-1} ≈ 7 * (1.81/(1+4 α^2))^(1/3) * (q)^(1/3) * (2/(1+q))^(5/3) * (0.45/α)^(11/3)
+    """
+    return 7.0 * (1.81 / (1.0 + 4.0 * alpha**2)) ** (1.0 / 3.0) \
+             * (q ** (1.0 / 3.0)) \
+             * (2.0 / (1.0 + q)) ** (5.0 / 3.0) \
+             * (0.45 / alpha) ** (11.0 / 3.0)
+
+
+
+def fc_from_Omega0(Omega0):
+    return (2.0 / np.pi) * Omega0
+
+def psi_plus(f, r, f0, Delta_m, gamma):
+    return f * r + ((f - f0) ** 2) / (4.0 * abs(Delta_m) * gamma) - np.pi / 4.0
+
+
+
+def htilde_plus(
+    f,  # array-like (Hz in your chosen units)
+    #iota, #binary inclination
+    M, r, alpha,           # source mass, distance, fine-structure parameter
+    Omega0,                # orbital frequency scale
+    q,                     # binary mass ratio (companion/host)
+    m_i, m_f,              # initial/final magnetic quantum numbers (e.g., 1 -> -1)
+    eta,                   # parameter entering z (or leave None to use z_scaling below)
+    Gamma_abs,             # |Γ| > 0 (same units as f)
+    use_z_scaling=False,    # if True, use numerical Eq. (15.5) instead of z=η^2/(|Δm|γ)
+    numerical_qc=True     # if False, use analytical qc=q_c(alpha, m_i)
+):
+    f = np.asarray(f, dtype=float)
+    Delta_m = abs(m_f - m_i)
+
+    # ã_crit and q_c
+    acrit = a_tilde_crit(m_i, alpha)
+    
+    #qc=0.093 add numerical if possible
+
+    # gamma (15.9)
+    gamma = gamma_rate(q, M, Omega0)
+    #boson mass
+    Mp = 1.220890e28 # for eV
+    G = 1 / Mp**2 
+    boson_mass = alpha/(G*M)
+
+    # z (15.1) or scaling (15.5)
+    if use_z_scaling:
+        z = z_scaling_211_to_21m1(alpha, q)
+    else:
+        z = z_parameter(eta, Delta_m, gamma)
+        
+    # q_c or numerical_cloudmass
+    if numerical_qc:
+        qc = compute_cloud_mass_numerical(alpha, M, boson_mass, spin=0.99)/M
+    else:
+        qc = q_c(alpha, m_i)
+
+    # h0 amplitude (15.12)
+    h0 = h0_from_params(qc, M, r, alpha, Omega0)
+    
+    # central frequency and phase (under 15.15)
+    f_c = fc_from_Omega0(Omega0)
+    f0 = f_c
+    # print(f'{f0:.4}')
+    phase = psi_plus(f, r, f0, Delta_m, gamma)
+
+    # denominator and envelope
+    denom = np.sqrt(z) / (abs(Gamma_abs) - 1j * np.pi * (f - f_c))
+    envelope = np.exp(-np.pi * z) * np.exp(-2.0 * z * np.arctan(np.pi * (f - f_c) / abs(Gamma_abs)))
+
+    # assemble, need factor of G to account for units of denominator gamma and freq ( 1/Hz = GeV, therefore need 1/Gev, -> sqrt(G)=1/Mp)
+    #pref = h0 * (1.0 + np.cos(0.0)**2)* np.sqrt(np.pi) * (Delta_m ** 2)  # placeholder; will be overwritten below
+    # Fix: include actual inclination:
+    def with_inclination(iota):
+        pref = h0*(1.0 + np.cos(iota) ** 2) * np.sqrt(np.pi) * (Delta_m ** 2)
+
+        return np.abs(pref * 1j * np.exp(1j * phase) * envelope * denom) / 2.417987242e14
+    # For troubleshooting below
+    # print(f'h0 is: {h0}')
+    # print(f'Prefix is: {pref}')
+    # print(f'envelope is: {max(envelope)}')
+    # print(f'denom is: {min(denom)}')
+    return with_inclination
