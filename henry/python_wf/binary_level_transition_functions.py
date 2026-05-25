@@ -1577,7 +1577,7 @@ def q_c(alpha, m_i):
     if denom == 0.0:
         return 0.0
 
-    return 8.0 * alpha**2 * one_minus / denom - 1# see if we want to convert this into numerical as well # you don't
+    return 8.0 * alpha**2 * one_minus / denom - 1# see if we want to convert this into numerical as well # Done
 
 
 # M is host BH mass
