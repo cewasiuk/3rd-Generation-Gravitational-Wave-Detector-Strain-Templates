@@ -36,11 +36,13 @@ function iso_gatom_level_tr_strain(;
     gamma_t_ne_GeV = gamma_t_6g_to_5g(alpha, omega_tr, M)
     gamma_t_ne_yr = gamma_t_ne_GeV * GeV_to_yrinv
 
-    println()
-    println(" alpha    = ", alpha)
-    println(" omega_tr = ", omega_tr)
-    @printf(" r_g(M)   = %.4e GeV^-1\n", r_g(M))
-    @printf(" M        = %.4e GeV\n", M)
+    if verbose == true
+        println()
+        println(" alpha    = ", alpha)
+        println(" omega_tr = ", omega_tr)
+        @printf(" r_g(M)   = %.4e GeV^-1\n", r_g(M))
+        @printf(" M        = %.4e GeV\n", M)
+    end
 
     dist_GeV_inv = distance_kpc * kpc_to_GeV
 
