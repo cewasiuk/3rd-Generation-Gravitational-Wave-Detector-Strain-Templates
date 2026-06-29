@@ -1,4 +1,4 @@
-if !isdefined(Main, :ChrisWF)
+if !isdefined(@__MODULE__, :ChrisWF)
     include("constants.jl")
 end
 using .ChrisWF
@@ -51,6 +51,40 @@ function h_pcr_ann(f_grid_Hz, mua, M_solar, n, l, alpha, r_kpc, iota, phase)
     h_cross = (c / (2.0im)) * (exp(im * phase) * hmin - exp(-im * phase) * hp)
 
     return h_plus, h_cross, f_grid_Hz, f_a_Hz
+end
+
+function h_pcr_ann_no_iota(f_grid_Hz, mua, M_solar, n, l, alpha, r_kpc, phase)
+    omega_a_GeV = omega_ann(mua, alpha, n)
+    f_a_Hz = omega_a_GeV * GeV_to_Hz
+
+    f_grid_Hz = Float64.(collect(f_grid_Hz))
+    delta_f_minus = f_grid_Hz .- f_a_Hz
+    delta_f_plus = .-(f_grid_Hz .- f_a_Hz)
+
+    hmin = h_ann(delta_f_minus, mua, M_solar, n, l, alpha, r_kpc, omega_a_GeV)
+    hp = h_ann(delta_f_plus, mua, M_solar, n, l, alpha, r_kpc, omega_a_GeV)
+
+    h_plus = 0.5 .* (exp(im * phase) * hmin + exp(-im * phase) * hp)
+    h_cross = (1.0 / (2.0im)) .* (exp(im * phase) * hmin - exp(-im * phase) * hp)
+
+    return h_plus, h_cross, f_grid_Hz, f_a_Hz
+end
+
+function amp_phase_pcr_ann_no_iota(f_grid_Hz, mua, M_solar, n, l, alpha, r_kpc, phase)
+    omega_a_GeV = omega_ann(mua, alpha, n)
+    f_a_Hz = omega_a_GeV * GeV_to_Hz
+
+    f_grid_Hz = Float64.(collect(f_grid_Hz))
+    delta_f_minus = f_grid_Hz .- f_a_Hz
+
+    h = exp(im * phase) .* h_ann(
+        delta_f_minus, mua, M_solar, n, l, alpha, r_kpc, omega_a_GeV,
+    )
+
+    amp = abs.(h)
+    phase_h = angle.(h)
+
+    return amp, phase_h, f_grid_Hz, f_a_Hz
 end
 
 function iso_gatom_ann_strain(; 
