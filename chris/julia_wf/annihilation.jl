@@ -24,7 +24,7 @@ function h_ann(delta_f_Hz, mua, M_solar, n, l, alpha, r_kpc, omega_a_GeV)
     Gamma = gamma_ann(l, alpha, M_GeV)
     N_max = 10.0^76 * (M_solar / 10.0)^2
 
-    delta_E = Float64.(collect(delta_f_Hz)) .* Hz_to_GeV
+    delta_E = (collect(delta_f_Hz)) .* Hz_to_GeV
     z = im .* delta_E ./ (Gamma * N_max)
 
     pref = (1.0 / (2.0 * pi)) * sqrt(4.0 * G / (Gamma * r^2 * omega_a_GeV))
