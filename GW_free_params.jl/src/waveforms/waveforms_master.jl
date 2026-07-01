@@ -17,7 +17,7 @@ using SpecialFunctions: expint
 
 
 export TaylorF2, PhenomD, PhenomD_NRTidal, PhenomHM, PhenomNSBH, PhenomXAS, PhenomXHM, PhenomD_TIGER, PhenomHM_TIGER, PhenomD_TIGER_spinless, PhenomHM_TIGER_spinless
-export Model, GrModel, BgrModel, NonCBC, CBC, BosonSR, BosonSR_ann
+export Model, GrModel, BgrModel, NonCBC, CBC, BosonSR, BosonSR_ann, BosonSR_level, BosonSR_binary
 export Ampl, Phi, PolAbs, Pol, _npar, _event_type, _available_waveforms, _fcut, _finalspin, _radiatednrg, _tau_star, _list_polarizations, hphc
 
 # Define an abstract type for the models
@@ -186,6 +186,50 @@ end
 struct BosonSR_ann <: NonCBC
 end
 
+struct BosonSR_level <: NonCBC
+    a_spin::Float64
+    ne::Int
+    ng::Int
+    m::Union{Nothing,Int}
+    N_e0::Float64
+    N_g0::Float64
+    n_time::Int
+    n_fft::Int
+    n_top::Int
+    verbose::Bool
+
+    BosonSR_level(;
+        a_spin = 0.999999,
+        ne = 6,
+        ng = 5,
+        m = nothing,
+        N_e0 = 1.0,
+        N_g0 = 1.0e-6,
+        n_time = 512,
+        n_fft = 4096,
+        n_top = 120,
+        verbose = false,
+    ) = new(a_spin, ne, ng, m, N_e0, N_g0, n_time, n_fft, n_top, verbose)
+end
+
+struct BosonSR_binary <: NonCBC
+    m_i::Int
+    m_f::Int
+    n::Int
+    l_i::Int
+    use_z_scaling::Bool
+    numerical_qc::Bool
+
+    BosonSR_binary(;
+        m_i = 1,
+        m_f = -1,
+        n = 2,
+        l_i = 1,
+        use_z_scaling = false,
+        numerical_qc = false,
+    ) = new(m_i, m_f, n, l_i, use_z_scaling, numerical_qc)
+end
+
 """
 Returns the event_type of a struct<:Model as a string.
 """
@@ -194,7 +238,7 @@ function _event_type(model::Model)
 end
 
 function _available_waveforms()
-    return ["TaylorF2", "PhenomD", "PhenomHM", "PhenomD_NRTidal", "PhenomNSBH", "PhenomXAS", "PhenomXHM", "PhenomD_TIGER", "PhenomHM_TIGER", "PhenomD_TIGER_spinless", "PhenomHM_TIGER_spinless", "BosonSR", "BosonSR_ann"]
+    return ["TaylorF2", "PhenomD", "PhenomHM", "PhenomD_NRTidal", "PhenomNSBH", "PhenomXAS", "PhenomXHM", "PhenomD_TIGER", "PhenomHM_TIGER", "PhenomD_TIGER_spinless", "PhenomHM_TIGER_spinless", "BosonSR", "BosonSR_ann", "BosonSR_level", "BosonSR_binary"]
 end
 
 #@doc "Function to check the available waveforms and return the corresponding model."
@@ -221,6 +265,10 @@ function _available_waveforms(waveform::String)
         return BosonSR()
     elseif waveform == "BosonSR_ann"
         return BosonSR_ann()
+    elseif waveform == "BosonSR_level"
+        return BosonSR_level()
+    elseif waveform == "BosonSR_binary"
+        return BosonSR_binary()
     else
         error("Waveform not available. Choose between: " * join(_available_waveforms(), ", "))
     end
@@ -246,6 +294,8 @@ include("PhenomD_TIGER_spinless.jl")
 include("PhenomHM_TIGER_spinless.jl")
 include("bosonSR.jl")
 include("bosonSR_annihilation.jl")
+include("bosonSR_level_transition.jl")
+include("bosonSR_binary_transition.jl")
 
 ##############################################################################
 #   STRUCTURE USED IN THE MODULE
@@ -827,12 +877,28 @@ function _npar(model::BosonSR_ann)
     return length(_parameter_names(model))
 end
 
+function _npar(model::BosonSR_level)
+    return length(_parameter_names(model))
+end
+
+function _npar(model::BosonSR_binary)
+    return length(_parameter_names(model))
+end
+
 function _intrinsic_parameter_names(model::BosonSR)
     return (:p1, :p2, :p3)
 end
 
 function _intrinsic_parameter_names(model::BosonSR_ann)
     return (:M_solar, :mua)
+end
+
+function _intrinsic_parameter_names(model::BosonSR_level)
+    return (:M_solar, :alpha)
+end
+
+function _intrinsic_parameter_names(model::BosonSR_binary)
+    return (:q, :M_solar, :alpha, :Gamma_abs)
 end
 
 function _extrinsic_parameter_names(model::NonCBC)
@@ -890,6 +956,14 @@ function _list_polarizations(model::BosonSR)
  end
 
  function _list_polarizations(model::BosonSR_ann) 
+    return ["plus", "cross"]
+ end
+
+ function _list_polarizations(model::BosonSR_level)
+    return ["plus", "cross"]
+ end
+
+ function _list_polarizations(model::BosonSR_binary)
     return ["plus", "cross"]
  end
 
