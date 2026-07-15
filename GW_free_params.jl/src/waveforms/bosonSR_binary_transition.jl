@@ -10,14 +10,14 @@ function _henry_frequency_eV(f::AbstractVector)
 end
 
 function _henry_distance_eV_inv(dL)
-    return _numeric_value(dL) * _HENRY_GPC_TO_EV_INV
+    return dL * _HENRY_GPC_TO_EV_INV
 end
 
 function _henry_central_frequency_Hz(model::BosonSR_binary, q, M_solar, alpha)
-    M = _numeric_value(M_solar) * HenryBinaryTransition.HenryWF.Msol_in_eV
+    M = M_solar * HenryBinaryTransition.HenryWF.Msol_in_eV
     Omega0 = HenryBinaryTransition.HenryWF.Omega0_binary_natural_unit(
         model.m_i,
-        _numeric_value(alpha),
+        alpha,
         HenryBinaryTransition.HenryWF.G,
         M,
         model.n,
@@ -34,35 +34,31 @@ function _henry_plus_amplitude(model::BosonSR_binary,
     Gamma_abs,
     dL,
 )
-    M_solar_val = _numeric_value(M_solar)
-    alpha_val = _numeric_value(alpha)
-    q_val = _numeric_value(q)
-    dL_val = _numeric_value(dL)
-    M = M_solar_val * HenryBinaryTransition.HenryWF.Msol_in_eV
+    M = M_solar * HenryBinaryTransition.HenryWF.Msol_in_eV
     Omega0 = HenryBinaryTransition.HenryWF.Omega0_binary_natural_unit(
         model.m_i,
-        alpha_val,
+        alpha,
         HenryBinaryTransition.HenryWF.G,
         M,
         model.n,
         model.l_i,
     )
-    eta = HenryBinaryTransition.HenryWF.eta_parameter(alpha_val, q_val, M_solar_val)
+    eta = HenryBinaryTransition.HenryWF.eta_parameter(alpha, q, M_solar)
     h_of_iota = HenryBinaryTransition.HenryWF.htilde_plus(
         _henry_frequency_eV(f),
         M,
-        _henry_distance_eV_inv(dL_val),
-        alpha_val,
+        _henry_distance_eV_inv(dL),
+        alpha,
         Omega0,
-        q_val,
+        q,
         model.m_i,
         model.m_f,
         eta,
-        _numeric_value(Gamma_abs);
+        Gamma_abs;
         use_z_scaling = model.use_z_scaling,
         numerical_qc = model.numerical_qc,
     )
-    return h_of_iota(0.0) .* (dL_val / dL)
+    return h_of_iota(0.0)
 end
 
 function Pol(model::BosonSR_binary,

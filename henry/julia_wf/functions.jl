@@ -674,7 +674,7 @@ function htilde_plus(
     use_z_scaling=false,
     numerical_qc=true,
 )
-    f = Float64.(collect(f))
+    f = collect(f)
     Delta_m = abs(m_f - m_i)
 
     acrit = a_tilde_crit(m_i, alpha_in)

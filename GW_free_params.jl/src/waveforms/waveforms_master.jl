@@ -17,7 +17,7 @@ using SpecialFunctions: expint
 
 
 export TaylorF2, PhenomD, PhenomD_NRTidal, PhenomHM, PhenomNSBH, PhenomXAS, PhenomXHM, PhenomD_TIGER, PhenomHM_TIGER, PhenomD_TIGER_spinless, PhenomHM_TIGER_spinless
-export Model, GrModel, BgrModel, NonCBC, CBC, BosonSR, BosonSR_ann, BosonSR_level, BosonSR_binary
+export Model, GrModel, BgrModel, NonCBC, CBC, BosonSR, BosonSR_ann, BosonSR_level, BosonSR_level_FFT, BosonSR_level_num_der, BosonSR_binary
 export Ampl, Phi, PolAbs, Pol, _npar, _event_type, _available_waveforms, _fcut, _finalspin, _radiatednrg, _tau_star, _list_polarizations, hphc
 
 # Define an abstract type for the models
@@ -212,6 +212,62 @@ struct BosonSR_level <: NonCBC
     ) = new(a_spin, ne, ng, m, N_e0, N_g0, n_time, n_fft, n_top, verbose)
 end
 
+struct BosonSR_level_FFT <: NonCBC
+    a_spin::Float64
+    ne::Int
+    ng::Int
+    m::Union{Nothing,Int}
+    N_e0::Float64
+    N_g0::Float64
+    n_time::Int
+    n_fft::Int
+    n_top::Int
+    verbose::Bool
+
+    BosonSR_level_FFT(;
+        a_spin = 0.999999,
+        ne = 6,
+        ng = 5,
+        m = nothing,
+        N_e0 = 1.0,
+        N_g0 = 1.0e-6,
+        n_time = 512,
+        n_fft = 4096,
+        n_top = 120,
+        verbose = false,
+    ) = new(a_spin, ne, ng, m, N_e0, N_g0, n_time, n_fft, n_top, verbose)
+end
+
+struct BosonSR_level_num_der <: NonCBC
+    a_spin::Float64
+    ne::Int
+    ng::Int
+    m::Union{Nothing,Int}
+    N_e0::Float64
+    N_g0::Float64
+    n_time::Int
+    n_fft::Int
+    n_top::Int
+    verbose::Bool
+    fd_rel_step::Float64
+    fd_abs_step::Float64
+
+    BosonSR_level_num_der(;
+        a_spin = 0.999999,
+        ne = 6,
+        ng = 5,
+        m = nothing,
+        N_e0 = 1.0,
+        N_g0 = 1.0e-6,
+        n_time = 512,
+        n_fft = 4096,
+        n_top = 120,
+        verbose = false,
+        fd_rel_step = 1.0e-4,
+        fd_abs_step = 1.0e-8,
+    ) = new(a_spin, ne, ng, m, N_e0, N_g0, n_time, n_fft, n_top, verbose, fd_rel_step, fd_abs_step)
+end
+
 struct BosonSR_binary <: NonCBC
     m_i::Int
     m_f::Int
@@ -238,7 +294,7 @@ function _event_type(model::Model)
 end
 
 function _available_waveforms()
-    return ["TaylorF2", "PhenomD", "PhenomHM", "PhenomD_NRTidal", "PhenomNSBH", "PhenomXAS", "PhenomXHM", "PhenomD_TIGER", "PhenomHM_TIGER", "PhenomD_TIGER_spinless", "PhenomHM_TIGER_spinless", "BosonSR", "BosonSR_ann", "BosonSR_level", "BosonSR_binary"]
+    return ["TaylorF2", "PhenomD", "PhenomHM", "PhenomD_NRTidal", "PhenomNSBH", "PhenomXAS", "PhenomXHM", "PhenomD_TIGER", "PhenomHM_TIGER", "PhenomD_TIGER_spinless", "PhenomHM_TIGER_spinless", "BosonSR", "BosonSR_ann", "BosonSR_level", "BosonSR_level_FFT", "BosonSR_level_num_der", "BosonSR_binary"]
 end
 
 #@doc "Function to check the available waveforms and return the corresponding model."
@@ -267,6 +323,10 @@ function _available_waveforms(waveform::String)
         return BosonSR_ann()
     elseif waveform == "BosonSR_level"
         return BosonSR_level()
+    elseif waveform == "BosonSR_level_FFT"
+        return BosonSR_level_FFT()
+    elseif waveform == "BosonSR_level_num_der"
+        return BosonSR_level_num_der()
     elseif waveform == "BosonSR_binary"
         return BosonSR_binary()
     else
@@ -881,6 +941,14 @@ function _npar(model::BosonSR_level)
     return length(_parameter_names(model))
 end
 
+function _npar(model::BosonSR_level_FFT)
+    return length(_parameter_names(model))
+end
+
+function _npar(model::BosonSR_level_num_der)
+    return length(_parameter_names(model))
+end
+
 function _npar(model::BosonSR_binary)
     return length(_parameter_names(model))
 end
@@ -894,6 +962,14 @@ function _intrinsic_parameter_names(model::BosonSR_ann)
 end
 
 function _intrinsic_parameter_names(model::BosonSR_level)
+    return (:M_solar, :alpha)
+end
+
+function _intrinsic_parameter_names(model::BosonSR_level_FFT)
+    return (:M_solar, :alpha)
+end
+
+function _intrinsic_parameter_names(model::BosonSR_level_num_der)
     return (:M_solar, :alpha)
 end
 
@@ -960,6 +1036,14 @@ function _list_polarizations(model::BosonSR)
  end
 
  function _list_polarizations(model::BosonSR_level)
+    return ["plus", "cross"]
+ end
+
+ function _list_polarizations(model::BosonSR_level_FFT)
+    return ["plus", "cross"]
+ end
+
+ function _list_polarizations(model::BosonSR_level_num_der)
     return ["plus", "cross"]
  end
 
