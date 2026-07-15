@@ -17,7 +17,7 @@ using SpecialFunctions: expint
 
 
 export TaylorF2, PhenomD, PhenomD_NRTidal, PhenomHM, PhenomNSBH, PhenomXAS, PhenomXHM, PhenomD_TIGER, PhenomHM_TIGER, PhenomD_TIGER_spinless, PhenomHM_TIGER_spinless
-export Model, GrModel, BgrModel, NonCBC, CBC, BosonSR, BosonSR_ann, BosonSR_level, BosonSR_level_FFT, BosonSR_level_num_der, BosonSR_binary
+export Model, GrModel, BgrModel, NonCBC, CBC, BosonSR, BosonSR_ann, BosonSR_ann2, BosonSR_level, BosonSR_level_FFT, BosonSR_level_num_der, BosonSR_binary
 export Ampl, Phi, PolAbs, Pol, _npar, _event_type, _available_waveforms, _fcut, _finalspin, _radiatednrg, _tau_star, _list_polarizations, hphc
 
 # Define an abstract type for the models
@@ -186,6 +186,9 @@ end
 struct BosonSR_ann <: NonCBC
 end
 
+struct BosonSR_ann2 <: NonCBC
+end
+
 struct BosonSR_level <: NonCBC
     a_spin::Float64
     ne::Int
@@ -294,7 +297,7 @@ function _event_type(model::Model)
 end
 
 function _available_waveforms()
-    return ["TaylorF2", "PhenomD", "PhenomHM", "PhenomD_NRTidal", "PhenomNSBH", "PhenomXAS", "PhenomXHM", "PhenomD_TIGER", "PhenomHM_TIGER", "PhenomD_TIGER_spinless", "PhenomHM_TIGER_spinless", "BosonSR", "BosonSR_ann", "BosonSR_level", "BosonSR_level_FFT", "BosonSR_level_num_der", "BosonSR_binary"]
+    return ["TaylorF2", "PhenomD", "PhenomHM", "PhenomD_NRTidal", "PhenomNSBH", "PhenomXAS", "PhenomXHM", "PhenomD_TIGER", "PhenomHM_TIGER", "PhenomD_TIGER_spinless", "PhenomHM_TIGER_spinless", "BosonSR", "BosonSR_ann", "BosonSR_ann2", "BosonSR_level", "BosonSR_level_FFT", "BosonSR_level_num_der", "BosonSR_binary"]
 end
 
 #@doc "Function to check the available waveforms and return the corresponding model."
@@ -321,6 +324,8 @@ function _available_waveforms(waveform::String)
         return BosonSR()
     elseif waveform == "BosonSR_ann"
         return BosonSR_ann()
+    elseif waveform == "BosonSR_ann2"
+        return BosonSR_ann2()
     elseif waveform == "BosonSR_level"
         return BosonSR_level()
     elseif waveform == "BosonSR_level_FFT"
@@ -354,6 +359,7 @@ include("PhenomD_TIGER_spinless.jl")
 include("PhenomHM_TIGER_spinless.jl")
 include("bosonSR.jl")
 include("bosonSR_annihilation.jl")
+include("bosonSR_annihilation2.jl")
 include("bosonSR_level_transition.jl")
 include("bosonSR_binary_transition.jl")
 
@@ -937,6 +943,10 @@ function _npar(model::BosonSR_ann)
     return length(_parameter_names(model))
 end
 
+function _npar(model::BosonSR_ann2)
+    return length(_parameter_names(model))
+end
+
 function _npar(model::BosonSR_level)
     return length(_parameter_names(model))
 end
@@ -958,6 +968,10 @@ function _intrinsic_parameter_names(model::BosonSR)
 end
 
 function _intrinsic_parameter_names(model::BosonSR_ann)
+    return (:M_solar, :mua)
+end
+
+function _intrinsic_parameter_names(model::BosonSR_ann2)
     return (:M_solar, :mua)
 end
 
@@ -1032,6 +1046,10 @@ function _list_polarizations(model::BosonSR)
  end
 
  function _list_polarizations(model::BosonSR_ann) 
+    return ["plus", "cross"]
+ end
+
+ function _list_polarizations(model::BosonSR_ann2)
     return ["plus", "cross"]
  end
 
