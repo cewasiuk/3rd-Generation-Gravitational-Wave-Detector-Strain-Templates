@@ -1,9 +1,18 @@
 import numpy as np
 import math
 from scipy.integrate import dblquad, quad
-from scipy.special import sph_harm
+try:
+    from scipy.special import sph_harm
+except ImportError:
+    from scipy.special import sph_harm_y
+
+    def sph_harm(m, n, theta, phi):
+        return sph_harm_y(n, m, phi, theta)
 from fractions import Fraction
-from iminuit import Minuit
+try:
+    from iminuit import Minuit
+except ImportError:
+    Minuit = None
 from math import factorial
 #from numba import njit # Probably need to delete if converting into Julia, Julia does this already
 from scipy.special import gamma
@@ -23,6 +32,14 @@ from cmath import sqrt as csqrt
 #=======================================
 Mp = 1.220890e28 # we are doing eV here
 G = 1 / Mp**2 
+
+
+def _data_path(filename):
+    for data_dir in (Path(__file__).parent / "data", Path(__file__).parent.parent / "data"):
+        path = data_dir / filename
+        if path.exists():
+            return path
+    raise FileNotFoundError(f"Could not find data file {filename!r}")
 
 
 
@@ -289,7 +306,7 @@ def sYlm(ss, ll, mm, theta):
 class RelScalar(CloudModel):
     def __init__(self, nonrel_freq_shift=False):
         # m=1 modes
-        m1_data = np.load(Path(__file__).parent.joinpath('data/m1_sc_mds.npz'))
+        m1_data = np.load(_data_path('m1_sc_mds.npz'))
         m1_wr = m1_data['wr'].flatten()
         m1_wi = m1_data['wi'].flatten()
         m1_a = m1_data['a'].flatten()
@@ -299,7 +316,7 @@ class RelScalar(CloudModel):
         self._nonrel_freq_shift = nonrel_freq_shift
 
         if not self._nonrel_freq_shift:
-            shift_data = np.load(Path(__file__).parent.joinpath('data/scalar_freqshift_m1_interp.npz'))
+            shift_data = np.load(_data_path('scalar_freqshift_m1_interp.npz'))
             alpha = shift_data['alpha'].flatten()
             lin_shift = shift_data['lin_shift'].flatten()
             quad_shift = shift_data['quad_shift'].flatten()
@@ -311,7 +328,7 @@ class RelScalar(CloudModel):
             self._max_numeric_alpha = max(alpha)
 
         # m=2 modes
-        m2_data = np.load(Path(__file__).parent.joinpath('data/m2_sc_mds.npz'))
+        m2_data = np.load(_data_path('m2_sc_mds.npz'))
         m2_wr = m2_data['wr'].flatten()
         m2_wi = m2_data['wi'].flatten()
         m2_a = m2_data['a'].flatten()
@@ -320,7 +337,7 @@ class RelScalar(CloudModel):
         self._f2wi = interpolate.LinearNDInterpolator(list(zip(m2_y,m2_a)),m2_wi)
 
         # Fit coefficients
-        fit_data = np.load(Path(__file__).parent.joinpath('data/sc_fits.npz'))
+        fit_data = np.load(_data_path('sc_fits.npz'))
         self._amat1 = fit_data['amat1']
         self._bmat1 = fit_data['bmat1']
         self._cmat1 = fit_data['cmat1']
@@ -329,7 +346,7 @@ class RelScalar(CloudModel):
         self._cmat2 = fit_data['cmat2']
 
         # Radiation data
-        sat_flux_data = np.load(Path(__file__).parent.joinpath('data/sc_sat_gw.npz'))
+        sat_flux_data = np.load(_data_path('sc_sat_gw.npz'))
         m1_flux = sat_flux_data['m1_flux']
         m1_mu = sat_flux_data['m1_mu']
         m1_Z2r = sat_flux_data['m1_z2r']
@@ -1496,21 +1513,35 @@ def find_cf_root(mbh: float, astar: float, mu: float, n: int = 2, l: int = 1, m:
     omR = omegaHyperfine(mu, mbh, astar, n, l, m) 
     _, omI = omega_nlm_bxzh(mu, mbh, astar, n, l, m) 
     if omR > 0 and omI > 0 and alph > 0:
-        cost_oR = lambda x: np.log(np.abs(root_equation(x+1j*omI, mbh, astar, mu, l, m))) #cost function for optimization that's used to find the real part of the complex frequency
-        mR = Minuit(cost_oR, x=omR) #There should be a Minuit Package in Julia
-        mR.tol = 1e-10
         factor = 0.5*alph*alph
         om0 = mu*(1 - 0.5*factor*( 1.0/((n-1)*(n-1)) + 1.0/(n*n) ))
         om1 = mu*(1 - factor/(n*n))
-        mR.limits["x"] = (om0, om1)
-        mR.migrad()
+        x_bounds = (min(om0, om1), max(om0, om1))
+        lgy_bounds = (np.log10(0.7*omI), min(np.log10(10*omI), np.log10(0.1*omR)))
+        cost_oR = lambda x: np.log(np.abs(root_equation(x+1j*omI, mbh, astar, mu, l, m))) #cost function for optimization that's used to find the real part of the complex frequency
         cost = lambda x, lgy: np.abs(root_equation(x+1j*pow(10,lgy), mbh, astar, mu, l, m))
-        mRI = Minuit(cost, x=mR.values["x"], lgy=np.log10(omI))
-        mRI.tol = 1e-10
-        mRI.limits["x"] = (om0, om1)
-        mRI.limits["lgy"] = (np.log10(0.7*omI), min(np.log10(10*omI), np.log10(0.1*omR)))
-        mRI.migrad()
-        om = mRI.values["x"] + 1j*pow(10, mRI.values["lgy"])
+        if Minuit is not None:
+            mR = Minuit(cost_oR, x=omR) #There should be a Minuit Package in Julia
+            mR.tol = 1e-10
+            mR.limits["x"] = x_bounds
+            mR.migrad()
+            mRI = Minuit(cost, x=mR.values["x"], lgy=np.log10(omI))
+            mRI.tol = 1e-10
+            mRI.limits["x"] = x_bounds
+            mRI.limits["lgy"] = lgy_bounds
+            mRI.migrad()
+            om = mRI.values["x"] + 1j*pow(10, mRI.values["lgy"])
+        else:
+            res_x = optimize.minimize_scalar(cost_oR, bounds=x_bounds, method="bounded", options={"xatol": 1e-11})
+            res = optimize.minimize(
+                lambda vals: cost(vals[0], vals[1]),
+                x0=np.array([res_x.x, np.log10(omI)]),
+                bounds=[x_bounds, lgy_bounds],
+                method="Nelder-Mead",
+                options={"xatol": 1e-11, "fatol": 1e-11, "maxiter": 1000},
+            )
+            x, lgy = res.x
+            om = x + 1j*pow(10, lgy)
     else:
         if verbose:
             print("Estimates for real or imaginary part of omega are not positive:", om)

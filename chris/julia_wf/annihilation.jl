@@ -39,7 +39,7 @@ function h_pcr_ann(f_grid_Hz, mua, M_solar, n, l, alpha, r_kpc, iota, phase)
     omega_a_GeV = omega_ann(mua, alpha, n)
     f_a_Hz = omega_a_GeV * GeV_to_Hz
 
-    f_grid_Hz = Float64.(collect(f_grid_Hz))
+    f_grid_Hz = collect(f_grid_Hz)
     delta_f_minus = f_grid_Hz .- f_a_Hz
     delta_f_plus = .-(f_grid_Hz .- f_a_Hz)
 
@@ -57,7 +57,7 @@ function h_pcr_ann_no_iota(f_grid_Hz, mua, M_solar, n, l, alpha, r_kpc, phase)
     omega_a_GeV = omega_ann(mua, alpha, n)
     f_a_Hz = omega_a_GeV * GeV_to_Hz
 
-    f_grid_Hz = Float64.(collect(f_grid_Hz))
+    f_grid_Hz = collect(f_grid_Hz)
     delta_f_minus = f_grid_Hz .- f_a_Hz
     delta_f_plus = .-(f_grid_Hz .- f_a_Hz)
 
@@ -74,7 +74,7 @@ function amp_phase_pcr_ann_no_iota(f_grid_Hz, mua, M_solar, n, l, alpha, r_kpc, 
     omega_a_GeV = omega_ann(mua, alpha, n)
     f_a_Hz = omega_a_GeV * GeV_to_Hz
 
-    f_grid_Hz = Float64.(collect(f_grid_Hz))
+    f_grid_Hz = collect(f_grid_Hz)
     delta_f_minus = f_grid_Hz .- f_a_Hz
 
     h = exp(im * phase) .* h_ann(
