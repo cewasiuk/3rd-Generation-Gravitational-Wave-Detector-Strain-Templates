@@ -1681,7 +1681,7 @@ def htilde_plus(
         
     # q_c or numerical_cloudmass
     if numerical_qc:
-        qc = compute_cloud_mass_numerical(alpha, M, boson_mass, spin=0.99)/M
+        qc = compute_cloud_mass_numerical(alpha, M, boson_mass, spin=0.99)/(M-compute_cloud_mass_numerical(alpha, M, boson_mass, spin=0.99))
     else:
         qc = q_c(alpha, m_i)
 
@@ -1701,7 +1701,7 @@ def htilde_plus(
     # assemble, need factor of G to account for units of denominator gamma and freq ( 1/Hz = GeV, therefore need 1/Gev, -> sqrt(G)=1/Mp)
     #pref = h0 * (1.0 + np.cos(0.0)**2)* np.sqrt(np.pi) * (Delta_m ** 2)  # placeholder; will be overwritten below
     # Fix: include actual inclination:
-    def with_inclination(iota):
+    def with_inclination_plus(iota):
         pref = h0*(1.0 + np.cos(iota) ** 2) * np.sqrt(np.pi) * (Delta_m ** 2)
 
         return np.abs(pref * 1j * np.exp(1j * phase) * envelope * denom) / 2.417987242e14
@@ -1710,4 +1710,70 @@ def htilde_plus(
     # print(f'Prefix is: {pref}')
     # print(f'envelope is: {max(envelope)}')
     # print(f'denom is: {min(denom)}')
-    return with_inclination
+    return with_inclination_plus
+
+def htilde_cross(
+    f,  # array-like (Hz in your chosen units)
+    #iota, #binary inclination
+    M, r, alpha,           # source mass, distance, fine-structure parameter
+    Omega0,                # orbital frequency scale
+    q,                     # binary mass ratio (companion/host)
+    m_i, m_f,              # initial/final magnetic quantum numbers (e.g., 1 -> -1)
+    eta,                   # parameter entering z (or leave None to use z_scaling below)
+    Gamma_abs,             # |Γ| > 0 (same units as f)
+    use_z_scaling=False,    # if True, use numerical Eq. (15.5) instead of z=η^2/(|Δm|γ)
+    numerical_qc=True     # if False, use analytical qc=q_c(alpha, m_i)
+):
+    f = np.asarray(f, dtype=float)
+    Delta_m = abs(m_f - m_i)
+
+    # ã_crit and q_c
+    acrit = a_tilde_crit(m_i, alpha)
+    
+    #qc=0.093 add numerical if possible
+
+    # gamma (15.9)
+    gamma = gamma_rate(q, M, Omega0)
+    #boson mass
+    Mp = 1.220890e28 # for eV
+    G = 1 / Mp**2 
+    boson_mass = alpha/(G*M)
+
+    # z (15.1) or scaling (15.5)
+    if use_z_scaling:
+        z = z_scaling_211_to_21m1(alpha, q)
+    else:
+        z = z_parameter(eta, Delta_m, gamma)
+        
+    # q_c or numerical_cloudmass
+    if numerical_qc:
+        qc = compute_cloud_mass_numerical(alpha, M, boson_mass, spin=0.99)/(M-compute_cloud_mass_numerical(alpha, M, boson_mass, spin=0.99))
+    else:
+        qc = q_c(alpha, m_i)
+
+    # h0 amplitude (15.12)
+    h0 = h0_from_params(qc, M, r, alpha, Omega0)
+    
+    # central frequency and phase (under 15.15)
+    f_c = fc_from_Omega0(Omega0)
+    f0 = f_c
+    # print(f'{f0:.4}')
+    phase = psi_plus(f, r, f0, Delta_m, gamma)
+
+    # denominator and envelope
+    denom = np.sqrt(z) / (abs(Gamma_abs) - 1j * np.pi * (f - f_c))
+    envelope = np.exp(-np.pi * z) * np.exp(-2.0 * z * np.arctan(np.pi * (f - f_c) / abs(Gamma_abs)))
+
+    # assemble, need factor of G to account for units of denominator gamma and freq ( 1/Hz = GeV, therefore need 1/Gev, -> sqrt(G)=1/Mp)
+    #pref = h0 * (1.0 + np.cos(0.0)**2)* np.sqrt(np.pi) * (Delta_m ** 2)  # placeholder; will be overwritten below
+    # Fix: include actual inclination:
+    def with_inclination_cross(iota):
+        pref = (-2 / (1j)) * h0 * np.cos(iota) * np.sqrt(np.pi) * (Delta_m ** 2)
+
+        return np.abs(pref * 1j * np.exp(1j * phase) * envelope * denom) / 2.417987242e14
+    # For troubleshooting below
+    # print(f'h0 is: {h0}')
+    # print(f'Prefix is: {pref}')
+    # print(f'envelope is: {max(envelope)}')
+    # print(f'denom is: {min(denom)}')
+    return with_inclination_cross
