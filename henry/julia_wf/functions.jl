@@ -47,7 +47,7 @@ export Mp, G, eV_per_kg, mP_in_GeV, mP_in_eV, Msol_in_kg, Msol_in_eV,
     sep_consts, angular_ev, cfunctions, alpha_n, beta_n, gamma_n,
     continued_fraction, root_equation, find_cf_root, cfm_bhsr_rates,
     a_tilde_crit, q_c, h0_from_params, gamma_rate, z_parameter,
-    z_scaling_211_to_21m1, fc_from_Omega0, psi_plus, htilde_plus,
+    z_scaling_211_to_21m1, fc_from_Omega0, psi_plus, htilde_plus, htilde_cross,
     compute_cloud_mass_numerical
 
 function _gamma_lanczos(z::Complex)
@@ -297,12 +297,46 @@ function sYlm(ss, ll, mm, theta)
     return Pm .* s_lambda_lm(s, l, m, cos(theta))
 end
 
+const _cloud_mass_cache = Dict{Tuple{Float64,Float64,Float64,Float64},Float64}()
+
+function _primal_value(x)
+    try
+        return getfield(x, :value)
+    catch
+        return x
+    end
+end
+
 function compute_cloud_mass_numerical(alpha_in, M, boson_mass; spin=0.99)
-    throw(ArgumentError(
-        "compute_cloud_mass_numerical is table/interpolator backed in the Python source. " *
-        "Use htilde_plus(...; numerical_qc=false) for the analytical q_c path, or port " *
-        "RelScalar/MatchedWaveform with native .npz interpolation before enabling this."
-    ))
+    key = (
+        Float64(_primal_value(alpha_in)),
+        Float64(_primal_value(M)),
+        Float64(_primal_value(boson_mass)),
+        Float64(_primal_value(spin)),
+    )
+    if haskey(_cloud_mass_cache, key)
+        return _cloud_mass_cache[key]
+    end
+
+    python_dir = normpath(joinpath(@__DIR__, "..", "python_wf"))
+    code = """
+import sys
+sys.path.insert(0, $(repr(python_dir)))
+import binary_level_transition_functions as wf
+print(wf.compute_cloud_mass_numerical($(repr(key[1])), $(repr(key[2])), $(repr(key[3])), spin=$(repr(key[4]))))
+"""
+    python_exe = get(ENV, "PYTHON", "python")
+    output = try
+        read(`$python_exe -W ignore -c $code`, String)
+    catch err
+        throw(ErrorException(
+            "Henry numerical cloud-mass evaluation failed. Set ENV[\"PYTHON\"] " *
+            "to a Python executable with NumPy/SciPy available. Original error: $err"
+        ))
+    end
+    value = parse(Float64, strip(output))
+    _cloud_mass_cache[key] = value
+    return value
 end
 
 # =======================================
@@ -660,7 +694,7 @@ function psi_plus(f, r, f0, Delta_m, gamma)
     return f .* r .+ ((f .- f0).^2) ./ (4.0 * abs(Delta_m) * gamma) .- pi / 4.0
 end
 
-function htilde_plus(
+function _binary_transition_base(
     f,
     M,
     r,
@@ -677,14 +711,14 @@ function htilde_plus(
     f = collect(f)
     Delta_m = abs(m_f - m_i)
 
-    acrit = a_tilde_crit(m_i, alpha_in)
     gamma = gamma_rate(q, M, Omega0)
     boson_mass = alpha_in / (G * M)
 
     z = use_z_scaling ? z_scaling_211_to_21m1(alpha_in, q) : z_parameter(eta, Delta_m, gamma)
 
     qc = if numerical_qc
-        compute_cloud_mass_numerical(alpha_in, M, boson_mass; spin=0.99) / M
+        cloud_mass = compute_cloud_mass_numerical(alpha_in, M, boson_mass; spin=0.99)
+        cloud_mass / (M - cloud_mass)
     else
         q_c(alpha_in, m_i)
     end
@@ -698,8 +732,59 @@ function htilde_plus(
     denom = sqrt(z) ./ (abs(Gamma_abs) .- 1.0im .* pi .* (f .- f_c))
     envelope = exp(-pi * z) .* exp.(-2.0 * z .* atan.(pi .* (f .- f_c) ./ abs(Gamma_abs)))
 
+    return h0, Delta_m, phase, envelope, denom
+end
+
+function htilde_plus(
+    f,
+    M,
+    r,
+    alpha_in,
+    Omega0,
+    q,
+    m_i,
+    m_f,
+    eta,
+    Gamma_abs;
+    use_z_scaling=false,
+    numerical_qc=true,
+)
+    h0, Delta_m, phase, envelope, denom = _binary_transition_base(
+        f, M, r, alpha_in, Omega0, q, m_i, m_f, eta, Gamma_abs;
+        use_z_scaling=use_z_scaling,
+        numerical_qc=numerical_qc,
+    )
+
     function with_inclination(iota)
         pref = h0 * (1.0 + cos(iota)^2) * sqrt(pi) * Delta_m^2
+        return abs.(pref .* 1.0im .* exp.(1.0im .* phase) .* envelope .* denom) ./ 2.417987242e14
+    end
+
+    return with_inclination
+end
+
+function htilde_cross(
+    f,
+    M,
+    r,
+    alpha_in,
+    Omega0,
+    q,
+    m_i,
+    m_f,
+    eta,
+    Gamma_abs;
+    use_z_scaling=false,
+    numerical_qc=true,
+)
+    h0, Delta_m, phase, envelope, denom = _binary_transition_base(
+        f, M, r, alpha_in, Omega0, q, m_i, m_f, eta, Gamma_abs;
+        use_z_scaling=use_z_scaling,
+        numerical_qc=numerical_qc,
+    )
+
+    function with_inclination(iota)
+        pref = (-2.0 / 1.0im) * h0 * cos(iota) * sqrt(pi) * Delta_m^2
         return abs.(pref .* 1.0im .* exp.(1.0im .* phase) .* envelope .* denom) ./ 2.417987242e14
     end
 

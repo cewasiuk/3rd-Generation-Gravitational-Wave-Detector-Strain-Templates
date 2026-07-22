@@ -17,7 +17,7 @@ using SpecialFunctions: expint
 
 
 export TaylorF2, PhenomD, PhenomD_NRTidal, PhenomHM, PhenomNSBH, PhenomXAS, PhenomXHM, PhenomD_TIGER, PhenomHM_TIGER, PhenomD_TIGER_spinless, PhenomHM_TIGER_spinless
-export Model, GrModel, BgrModel, NonCBC, CBC, BosonSR, BosonSR_ann, BosonSR_ann2, BosonSR_level, BosonSR_level_FFT, BosonSR_level_num_der, BosonSR_binary
+export Model, GrModel, BgrModel, NonCBC, CBC, BosonSR, BosonSR_ann, BosonSR_ann2, BosonSR_level, BosonSR_level_FFT, BosonSR_level_num_der, BosonSR_binary, BosonSR_binary_num
 export Ampl, Phi, PolAbs, Pol, _npar, _event_type, _available_waveforms, _fcut, _finalspin, _radiatednrg, _tau_star, _list_polarizations, hphc
 
 # Define an abstract type for the models
@@ -289,6 +289,24 @@ struct BosonSR_binary <: NonCBC
     ) = new(m_i, m_f, n, l_i, use_z_scaling, numerical_qc)
 end
 
+struct BosonSR_binary_num <: NonCBC
+    m_i::Int
+    m_f::Int
+    n::Int
+    l_i::Int
+    use_z_scaling::Bool
+
+    BosonSR_binary_num(;
+        m_i = 1,
+        m_f = -1,
+        n = 2,
+        l_i = 1,
+        use_z_scaling = false,
+    ) = new(m_i, m_f, n, l_i, use_z_scaling)
+end
+
+const _BosonSRBinaryModels = Union{BosonSR_binary,BosonSR_binary_num}
+
 """
 Returns the event_type of a struct<:Model as a string.
 """
@@ -297,7 +315,7 @@ function _event_type(model::Model)
 end
 
 function _available_waveforms()
-    return ["TaylorF2", "PhenomD", "PhenomHM", "PhenomD_NRTidal", "PhenomNSBH", "PhenomXAS", "PhenomXHM", "PhenomD_TIGER", "PhenomHM_TIGER", "PhenomD_TIGER_spinless", "PhenomHM_TIGER_spinless", "BosonSR", "BosonSR_ann", "BosonSR_ann2", "BosonSR_level", "BosonSR_level_FFT", "BosonSR_level_num_der", "BosonSR_binary"]
+    return ["TaylorF2", "PhenomD", "PhenomHM", "PhenomD_NRTidal", "PhenomNSBH", "PhenomXAS", "PhenomXHM", "PhenomD_TIGER", "PhenomHM_TIGER", "PhenomD_TIGER_spinless", "PhenomHM_TIGER_spinless", "BosonSR", "BosonSR_ann", "BosonSR_ann2", "BosonSR_level", "BosonSR_level_FFT", "BosonSR_level_num_der", "BosonSR_binary", "BosonSR_binary_num"]
 end
 
 #@doc "Function to check the available waveforms and return the corresponding model."
@@ -334,6 +352,8 @@ function _available_waveforms(waveform::String)
         return BosonSR_level_num_der()
     elseif waveform == "BosonSR_binary"
         return BosonSR_binary()
+    elseif waveform == "BosonSR_binary_num"
+        return BosonSR_binary_num()
     else
         error("Waveform not available. Choose between: " * join(_available_waveforms(), ", "))
     end
@@ -959,7 +979,7 @@ function _npar(model::BosonSR_level_num_der)
     return length(_parameter_names(model))
 end
 
-function _npar(model::BosonSR_binary)
+function _npar(model::_BosonSRBinaryModels)
     return length(_parameter_names(model))
 end
 
@@ -987,7 +1007,7 @@ function _intrinsic_parameter_names(model::BosonSR_level_num_der)
     return (:M_solar, :alpha)
 end
 
-function _intrinsic_parameter_names(model::BosonSR_binary)
+function _intrinsic_parameter_names(model::_BosonSRBinaryModels)
     return (:q, :M_solar, :alpha, :Gamma_abs)
 end
 
@@ -1065,7 +1085,7 @@ function _list_polarizations(model::BosonSR)
     return ["plus", "cross"]
  end
 
- function _list_polarizations(model::BosonSR_binary)
+ function _list_polarizations(model::_BosonSRBinaryModels)
     return ["plus", "cross"]
  end
 
